@@ -23,7 +23,7 @@ linters:
         - G402 # TLS InsecureSkipVerify set true
         - G505 # Blocklisted import crypto/md5: weak cryptographic primitive
       config:
-        G306: "0644" # Poor file permissions used when writing to a new file 
+        G306: "0644" # Poor file permissions used when writing to a new file
   exclude-files:
     - /zz_generated_
     - _generated
@@ -45,9 +45,6 @@ linters:
       - linters:
           - staticcheck
         text: "QF1008:" # could remove embedded field from selector (staticcheck)
-      - linters:
-          - staticcheck
-        text: "SA1019:" # function is deprecated (staticcheck)
       - linters:
           - staticcheck
         text: "QF1012:" # Use fmt.Fprint(...) instead of Write([]byte(fmt.Sprint(...)))
