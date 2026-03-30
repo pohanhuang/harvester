@@ -39,7 +39,7 @@ replace (
 	k8s.io/apiserver => k8s.io/apiserver v0.35.3
 	k8s.io/cli-runtime => k8s.io/cli-runtime v0.35.3
 	k8s.io/client-go => k8s.io/client-go v11.0.0+incompatible
-	k8s.io/cloud-provider => k8s.io/cloud-provider v0.32.5
+	k8s.io/cloud-provider => k8s.io/cloud-provider v0.35.3
 	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.32.5
 	k8s.io/code-generator => k8s.io/code-generator v0.31.5
 	k8s.io/component-base => k8s.io/component-base v0.32.5
