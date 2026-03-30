@@ -52,7 +52,7 @@ replace (
 	k8s.io/gengo => k8s.io/gengo v0.0.0-20240826214909-a7b603a56eb7
 	k8s.io/gengo/v2 => k8s.io/gengo/v2 v2.0.0-20240228010128-51d4e06bde70
 	k8s.io/kms => k8s.io/kms v0.35.3
-	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.32.5
+	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.35.3
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.32.5
 	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
 	k8s.io/kube-proxy => k8s.io/kube-proxy v0.32.5
