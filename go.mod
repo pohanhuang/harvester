@@ -57,7 +57,7 @@ replace (
 	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
 	k8s.io/kube-proxy => k8s.io/kube-proxy v0.35.3
 	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.35.3
-	k8s.io/kubectl => k8s.io/kubectl v0.32.5
+	k8s.io/kubectl => k8s.io/kubectl v0.35.3
 	k8s.io/kubelet => k8s.io/kubelet v0.32.5
 	k8s.io/kubernetes => k8s.io/kubernetes v1.32.5
 	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.32.5
