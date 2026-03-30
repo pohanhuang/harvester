@@ -46,7 +46,7 @@ replace (
 	k8s.io/component-helpers => k8s.io/component-helpers v0.35.3
 	k8s.io/controller-manager => k8s.io/controller-manager v0.35.3
 	k8s.io/cri-api => k8s.io/cri-api v0.35.3
-	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.32.5
+	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.35.3
 	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.32.5
 	k8s.io/endpointslice => k8s.io/endpointslice v0.32.5
 	k8s.io/gengo => k8s.io/gengo v0.0.0-20240826214909-a7b603a56eb7
