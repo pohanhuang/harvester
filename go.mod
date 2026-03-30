@@ -127,7 +127,7 @@ require (
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.3
 	k8s.io/apimachinery v0.34.0
-	k8s.io/apiserver v0.34.0
+	k8s.io/apiserver v0.35.3
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/component-helpers v0.32.5
 	k8s.io/kube-openapi v0.31.9
