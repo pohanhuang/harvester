@@ -76,7 +76,7 @@ require (
 	github.com/go-errors/errors v1.4.2
 	github.com/gobuffalo/flect v1.0.3
 	github.com/gorilla/mux v1.8.1
-	github.com/guonaihong/gout v0.1.3
+	github.com/guonaihong/gout v0.3.11
 	github.com/harvester/go-common v0.0.0-20250109132713-e748ce72a7ba
 	github.com/harvester/harvester-network-controller v1.6.0-rc3
 	github.com/harvester/node-manager v1.6.0-rc3
