@@ -96,7 +96,7 @@ require (
 	github.com/onsi/gomega v1.38.0
 	github.com/openshift/api v0.0.0
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.82.0
+	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.90.1
 	github.com/rancher/apiserver v0.6.2
 	github.com/rancher/dynamiclistener v0.6.2
 	github.com/rancher/fleet/pkg/apis v0.12.3
