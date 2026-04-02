@@ -116,7 +116,7 @@ require (
 	github.com/tidwall/gjson v1.14.2
 	github.com/urfave/cli v1.22.16
 	go.uber.org/multierr v1.11.0
-	golang.org/x/crypto v0.40.0
+	golang.org/x/crypto v0.49.0
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
 	golang.org/x/net v0.42.0
 	golang.org/x/sync v0.16.0
