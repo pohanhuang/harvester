@@ -113,7 +113,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
-	github.com/tidwall/gjson v1.14.2
+	github.com/tidwall/gjson v1.18.0
 	github.com/urfave/cli v1.22.16
 	go.uber.org/multierr v1.11.0
 	golang.org/x/crypto v0.40.0
