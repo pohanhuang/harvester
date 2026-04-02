@@ -114,7 +114,7 @@ require (
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.2
-	github.com/urfave/cli v1.22.16
+	github.com/urfave/cli v1.22.17
 	go.uber.org/multierr v1.11.0
 	golang.org/x/crypto v0.40.0
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
