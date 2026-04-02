@@ -70,7 +70,7 @@ replace (
 require (
 	github.com/cisco-open/operator-tools v0.37.0
 	github.com/containernetworking/cni v1.3.0
-	github.com/deckarep/golang-set/v2 v2.6.0
+	github.com/deckarep/golang-set/v2 v2.8.0
 	github.com/ehazlett/simplelog v0.0.0-20200226020431-d374894e92a4
 	github.com/emicklei/go-restful/v3 v3.12.2
 	github.com/go-errors/errors v1.4.2
