@@ -2379,8 +2379,8 @@ k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset
 k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/scheme
 k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/typed/apiregistration/v1
 k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/typed/apiregistration/v1beta1
-# k8s.io/kube-openapi v0.32.8 => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
-## explicit; go 1.21
+# k8s.io/kube-openapi v0.32.8 => k8s.io/kube-openapi v0.0.0-20260414162039-ec9c827d403f
+## explicit; go 1.23.0
 k8s.io/kube-openapi/cmd/openapi-gen/args
 k8s.io/kube-openapi/pkg/builder
 k8s.io/kube-openapi/pkg/builder3
@@ -2837,6 +2837,9 @@ sigs.k8s.io/structured-merge-diff/v4/merge
 sigs.k8s.io/structured-merge-diff/v4/schema
 sigs.k8s.io/structured-merge-diff/v4/typed
 sigs.k8s.io/structured-merge-diff/v4/value
+# sigs.k8s.io/structured-merge-diff/v6 v6.3.0
+## explicit; go 1.23
+sigs.k8s.io/structured-merge-diff/v6/schema
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
@@ -2877,7 +2880,7 @@ sigs.k8s.io/yaml/goyaml.v3
 # k8s.io/kms => k8s.io/kms v0.33.7
 # k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.33.7
 # k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.33.7
-# k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
+# k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20260414162039-ec9c827d403f
 # k8s.io/kube-proxy => k8s.io/kube-proxy v0.33.7
 # k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.33.7
 # k8s.io/kubectl => k8s.io/kubectl v0.33.7

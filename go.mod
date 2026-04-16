@@ -40,7 +40,7 @@ replace (
 	k8s.io/kms => k8s.io/kms v0.33.7
 	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.33.7
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.33.7
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20260414162039-ec9c827d403f
 	k8s.io/kube-proxy => k8s.io/kube-proxy v0.33.7
 	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.33.7
 	k8s.io/kubectl => k8s.io/kubectl v0.33.7
@@ -360,4 +360,5 @@ require (
 	sigs.k8s.io/kustomize/api v0.19.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0 // indirect
+	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 )
