@@ -8,7 +8,7 @@ replace (
 	github.com/docker/docker => github.com/docker/docker v25.0.6+incompatible // oras dep requires a replace is set
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.9.1
 	github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
-	github.com/harvester/harvester-network-controller => github.com/harvester/harvester-network-controller v1.6.0-rc3
+	github.com/harvester/harvester-network-controller => github.com/harvester/harvester-network-controller v1.7.1
 	github.com/openshift/api => github.com/openshift/api v0.0.0-20191219222812-2987a591a72c
 	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 	github.com/operator-framework/operator-lifecycle-manager => github.com/operator-framework/operator-lifecycle-manager v0.0.0-20190128024246-5eb7ae5bdb7a
@@ -64,7 +64,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/guonaihong/gout v0.1.3
 	github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
-	github.com/harvester/harvester-network-controller v1.6.0-rc3
+	github.com/harvester/harvester-network-controller v1.7.1
 	github.com/harvester/node-manager v1.6.0-rc3
 	github.com/iancoleman/strcase v0.2.0
 	github.com/k3s-io/helm-controller v0.16.1
