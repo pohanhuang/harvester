@@ -122,7 +122,7 @@ require (
 	k8s.io/kubectl v0.32.2
 	k8s.io/kubelet v0.26.13
 	k8s.io/pod-security-admission v0.32.2
-	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
+	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
 	kubevirt.io/api v1.7.0
 	kubevirt.io/client-go v1.7.0
 	kubevirt.io/containerized-data-importer v1.64.0

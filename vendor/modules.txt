@@ -2433,8 +2433,8 @@ k8s.io/mount-utils
 # k8s.io/pod-security-admission v0.32.2 => k8s.io/pod-security-admission v0.33.7
 ## explicit; go 1.24.0
 k8s.io/pod-security-admission/api
-# k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
-## explicit; go 1.18
+# k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
+## explicit; go 1.23
 k8s.io/utils/buffer
 k8s.io/utils/clock
 k8s.io/utils/exec
