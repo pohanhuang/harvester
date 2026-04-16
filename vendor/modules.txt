@@ -471,10 +471,12 @@ github.com/guonaihong/gout/interface
 github.com/harvester/go-common/common
 github.com/harvester/go-common/ds
 github.com/harvester/go-common/version
-# github.com/harvester/harvester-network-controller v1.6.0-rc3 => github.com/harvester/harvester-network-controller v1.6.0-rc3
-## explicit; go 1.24.0
+# github.com/harvester/harvester-network-controller v1.7.1 => github.com/harvester/harvester-network-controller v1.7.1
+## explicit; go 1.25
 github.com/harvester/harvester-network-controller/pkg/apis/network.harvesterhci.io
 github.com/harvester/harvester-network-controller/pkg/apis/network.harvesterhci.io/v1beta1
+github.com/harvester/harvester-network-controller/pkg/generated/controllers/k8s.cni.cncf.io/v1
+github.com/harvester/harvester-network-controller/pkg/generated/controllers/kubevirt.io/v1
 github.com/harvester/harvester-network-controller/pkg/utils
 # github.com/harvester/node-manager v1.6.0-rc3
 ## explicit; go 1.24.0
@@ -2847,7 +2849,7 @@ sigs.k8s.io/yaml/goyaml.v3
 # github.com/docker/docker => github.com/docker/docker v25.0.6+incompatible
 # github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.9.1
 # github.com/google/gnostic-models => github.com/google/gnostic-models v0.6.9
-# github.com/harvester/harvester-network-controller => github.com/harvester/harvester-network-controller v1.6.0-rc3
+# github.com/harvester/harvester-network-controller => github.com/harvester/harvester-network-controller v1.7.1
 # github.com/openshift/api => github.com/openshift/api v0.0.0-20191219222812-2987a591a72c
 # github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 # github.com/operator-framework/operator-lifecycle-manager => github.com/operator-framework/operator-lifecycle-manager v0.0.0-20190128024246-5eb7ae5bdb7a
