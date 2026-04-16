@@ -36,7 +36,7 @@ replace (
 	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.33.7
 	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.33.7
 	k8s.io/endpointslice => k8s.io/endpointslice v0.33.7
-	k8s.io/gengo => k8s.io/gengo v0.0.0-20240826214909-a7b603a56eb7
+	k8s.io/gengo => k8s.io/gengo v0.0.0-20260408192533-25e2208e0dc3
 	k8s.io/kms => k8s.io/kms v0.33.7
 	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.33.7
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.33.7
