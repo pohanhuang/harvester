@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/bits"
 	"math/rand"
 	"net"
 	"net/url"
@@ -81,6 +80,10 @@ func (s *DataStore) UpdateCustomizedSettings(defaultImages map[types.SettingName
 		return err
 	}
 
+	if err := s.deleteReplacedSettings(); err != nil {
+		return err
+	}
+
 	if err := s.createNonExistingSettingCRsWithDefaultSetting(defaultSettingCM.ResourceVersion); err != nil {
 		return err
 	}
@@ -89,7 +92,7 @@ func (s *DataStore) UpdateCustomizedSettings(defaultImages map[types.SettingName
 		return err
 	}
 
-	return s.deleteReplacedSettings()
+	return nil
 }
 
 func (s *DataStore) createNonExistingSettingCRsWithDefaultSetting(configMapResourceVersion string) error {
@@ -207,7 +210,87 @@ func (s *DataStore) syncConsolidatedV2DataEngineSetting(oldSettingName, newSetti
 	return s.createOrUpdateSetting(newSettingName, oldSetting.Value, "")
 }
 
+func (s *DataStore) syncV2DataEngineGuaranteedInstanceManagerCPU() error {
+	defaultSetting, ok := types.GetSettingDefinition(types.SettingNameGuaranteedInstanceManagerCPU)
+	if !ok {
+		// Skip the sync if the setting is not defined
+		return nil
+	}
+
+	// Get old setting v2-data-engine-guaranteed-instance-manager-cpu
+	oldV2Setting, err := s.GetSettingExactRO(types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU)
+	if err != nil {
+		if ErrorIsNotFound(err) {
+			logrus.Warnf("Old setting %v not found, skipping the migration for guaranteed-instance-manager-cpu for v2 data engine",
+				types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU)
+			return nil
+		}
+		return errors.Wrapf(err, "failed to get old setting %v", types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU)
+	}
+
+	v2DataEngineGuaranteedInstanceManagerCPU, err := strconv.Atoi(oldV2Setting.Value)
+	if err != nil {
+		return errors.Wrapf(err, "failed to convert old setting %v value %v to integer",
+			types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU, oldV2Setting.Value)
+	}
+	if v2DataEngineGuaranteedInstanceManagerCPU < 0 {
+		return errors.Errorf("invalid negative value %d for setting %v",
+			v2DataEngineGuaranteedInstanceManagerCPU, types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU)
+	}
+
+	// Calculate the percentage based on the minimum number of CPUs among all nodes
+	numCPUs, err := s.getMinNumCPUsFromAvailableNodes()
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to get the minimum number of CPUs among all nodes, skipping the migration for guaranteed-instance-manager-cpu for v2 data engine")
+		return nil
+	}
+
+	originalGuaranteedInstanceManagerCPUInPercentage := int64(v2DataEngineGuaranteedInstanceManagerCPU*100) / (numCPUs * 1000)
+	guaranteedInstanceManagerCPUInPercentage := originalGuaranteedInstanceManagerCPUInPercentage
+	if guaranteedInstanceManagerCPUInPercentage > 100 {
+		guaranteedInstanceManagerCPUInPercentage = 100
+		logrus.Warnf("The calculated guaranteed-instance-manager-cpu percentage %v from old setting %v is larger than 100%%, set it to 100%%", originalGuaranteedInstanceManagerCPUInPercentage, types.SettingNameV2DataEngineGuaranteedInstanceManagerCPU)
+	}
+
+	// Get setting guaranteed-instance-manager-cpu
+	setting, err := s.GetSettingExact(types.SettingNameGuaranteedInstanceManagerCPU)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get setting %v", types.SettingNameGuaranteedInstanceManagerCPU)
+	}
+
+	dataEngineValues := make(map[longhorn.DataEngineType]string)
+	if err := json.Unmarshal([]byte(setting.Value), &dataEngineValues); err != nil {
+		return errors.Wrapf(err, "failed to unmarshal setting %v value %v", types.SettingNameGuaranteedInstanceManagerCPU, setting.Value)
+	}
+
+	// The guaranteedInstanceManagerCPUInPercentage value should not exceed the maximum value allowed
+	valueMaximum, ok := defaultSetting.ValueFloatRange[types.ValueFloatRangeMaximum]
+	if ok {
+		if float64(guaranteedInstanceManagerCPUInPercentage) > valueMaximum {
+			originalGuaranteedInstanceManagerCPUInPercentage := guaranteedInstanceManagerCPUInPercentage
+			guaranteedInstanceManagerCPUInPercentage = int64(valueMaximum)
+			logrus.Warnf("The calculated guaranteed-instance-manager-cpu percentage %v for v2 data engine is larger than the maximum %v%%, set it to the maximum", originalGuaranteedInstanceManagerCPUInPercentage, valueMaximum)
+		}
+	}
+
+	// Update the value for v2 data engine
+	dataEngineValues[longhorn.DataEngineTypeV2] = fmt.Sprintf("%d", guaranteedInstanceManagerCPUInPercentage)
+
+	// Update the value
+	valueBytes, err := json.Marshal(dataEngineValues)
+	if err != nil {
+		return errors.Wrapf(err, "failed to marshal new setting %v value %v",
+			types.SettingNameGuaranteedInstanceManagerCPU, dataEngineValues)
+	}
+
+	return s.createOrUpdateSetting(types.SettingNameGuaranteedInstanceManagerCPU, string(valueBytes), "")
+}
+
 func (s *DataStore) syncConsolidatedV2DataEngineSettings() error {
+	if err := s.syncV2DataEngineGuaranteedInstanceManagerCPU(); err != nil {
+		return err
+	}
+
 	settings := map[types.SettingName]types.SettingName{
 		types.SettingNameV2DataEngineHugepageLimit: types.SettingNameDataEngineMemorySize,
 		types.SettingNameV2DataEngineCPUMask:       types.SettingNameDataEngineCPUMask,
@@ -503,54 +586,6 @@ func (s *DataStore) ValidateSetting(name, value string) (err error) {
 			}
 		}
 
-	case types.SettingNameDataEngineCPUMask:
-		definition, ok := types.GetSettingDefinition(types.SettingNameDataEngineCPUMask)
-		if !ok {
-			return fmt.Errorf("setting %v is not found", types.SettingNameDataEngineCPUMask)
-		}
-		var values map[longhorn.DataEngineType]any
-		if types.IsJSONFormat(value) {
-			values, err = types.ParseDataEngineSpecificSetting(definition, value)
-		} else {
-			values, err = types.ParseSettingSingleValue(definition, value)
-		}
-		if err != nil {
-			return errors.Wrapf(err, "failed to parse value %v for setting %v", value, types.SettingNameDataEngineCPUMask)
-		}
-		for dataEngine, raw := range values {
-			cpuMask, ok := raw.(string)
-			if !ok {
-				return fmt.Errorf("setting %v value %v is not a string for data engine %v", types.SettingNameDataEngineCPUMask, raw, dataEngine)
-			}
-
-			lhNodes, err := s.ListNodesRO()
-			if err != nil {
-				return errors.Wrapf(err, "failed to list nodes for %v setting validation for data engine %v", types.SettingNameDataEngineCPUMask, dataEngine)
-			}
-
-			// Ensure if the CPU mask can be satisfied on each node
-			for _, lhNode := range lhNodes {
-				if isUnavailable, err := s.IsNodeDownOrDeletedOrMissingManager(lhNode.Name); err != nil {
-					return errors.Wrapf(err, "failed to check if node %v is down or deleted", lhNode.Name)
-				} else if isUnavailable {
-					continue
-				}
-
-				kubeNode, err := s.GetKubernetesNodeRO(lhNode.Name)
-				if err != nil {
-					if apierrors.IsNotFound(err) {
-						logrus.Warnf("Kubernetes node %s not found, skipping CPU mask validation for this node for data engine %v", lhNode.Name, dataEngine)
-						continue
-					}
-					return errors.Wrapf(err, "failed to get Kubernetes node %s for %v setting validation for data engine %v", lhNode.Name, types.SettingNameDataEngineCPUMask, dataEngine)
-				}
-
-				if err := s.ValidateCPUMask(kubeNode, cpuMask); err != nil {
-					return err
-				}
-			}
-		}
-
 	case types.SettingNameAutoCleanupSystemGeneratedSnapshot:
 		disablePurgeValue, err := s.GetSettingAsBool(types.SettingNameDisableSnapshotPurge)
 		if err != nil {
@@ -691,51 +726,6 @@ func (s *DataStore) ValidateV2DataEngineEnabled(dataEngineEnabled bool) (ims []*
 	return
 }
 
-func (s *DataStore) ValidateCPUMask(kubeNode *corev1.Node, value string) error {
-	if value == "" {
-		return fmt.Errorf("failed to validate CPU mask: cannot be empty")
-	}
-
-	// CPU mask must start with 0x
-	cpuMaskRegex := regexp.MustCompile(`^0x[1-9a-fA-F][0-9a-fA-F]*$`)
-	if !cpuMaskRegex.MatchString(value) {
-		return fmt.Errorf("invalid CPU mask: %s", value)
-	}
-
-	maskValue, err := strconv.ParseUint(value[2:], 16, 64) // skip 0x prefix
-	if err != nil {
-		return errors.Wrapf(err, "failed to parse CPU mask %v", value)
-	}
-
-	// Validate the mask value is not larger than the number of available CPUs
-	numCPUs, err := s.getMinNumCPUsFromAvailableNodes()
-	if err != nil {
-		return errors.Wrap(err, "failed to get minimum number of CPUs for CPU mask validation")
-	}
-
-	maxCPUMaskValue := (1 << numCPUs) - 1
-	if maskValue > uint64(maxCPUMaskValue) {
-		return fmt.Errorf("CPU mask exceeds the maximum allowed value %v for the current system: %s", maxCPUMaskValue, value)
-	}
-
-	// CPU mask currently only supports v2 data engine
-	guaranteedInstanceManagerCPUInPercentage, err := s.GetSettingAsFloatByDataEngine(types.SettingNameGuaranteedInstanceManagerCPU, longhorn.DataEngineTypeV2)
-	if err != nil {
-		return errors.Wrapf(err, "failed to get %v setting for guaranteed instance manager CPU validation for data engine %v",
-			types.SettingNameGuaranteedInstanceManagerCPU, longhorn.DataEngineTypeV2)
-	}
-
-	guaranteedInstanceManagerCPU := float64(kubeNode.Status.Allocatable.Cpu().MilliValue()) * guaranteedInstanceManagerCPUInPercentage
-
-	numMilliCPUsRequrestedByMaskValue := calculateMilliCPUs(maskValue)
-	if numMilliCPUsRequrestedByMaskValue > int(guaranteedInstanceManagerCPU) {
-		return fmt.Errorf("number of CPUs (%v) requested by CPU mask (%v) is larger than the %v setting value (%v)",
-			numMilliCPUsRequrestedByMaskValue, value, types.SettingNameGuaranteedInstanceManagerCPU, guaranteedInstanceManagerCPU)
-	}
-
-	return nil
-}
-
 func (s *DataStore) getMinNumCPUsFromAvailableNodes() (int64, error) {
 	kubeNodes, err := s.ListKubeNodesRO()
 	if err != nil {
@@ -772,16 +762,6 @@ func (s *DataStore) getMinNumCPUsFromAvailableNodes() (int64, error) {
 	}
 
 	return minNumCPUs, nil
-}
-
-func calculateMilliCPUs(mask uint64) int {
-	// Count the number of set bits in the mask
-	setBits := bits.OnesCount64(mask)
-
-	// Each set bit represents 1000 milliCPUs
-	numMilliCPUsRequestedByMaskValue := setBits * 1000
-
-	return numMilliCPUsRequestedByMaskValue
 }
 
 func (s *DataStore) AreAllRWXVolumesDetached() (bool, error) {
@@ -1864,6 +1844,18 @@ func (s *DataStore) CreateReplica(r *longhorn.Replica) (*longhorn.Replica, error
 		return s.GetReplicaRO(name)
 	})
 	if err != nil {
+		// Verification failed: The replica CR exists in etcd but is not yet appeared
+		// in the local informer cache. This can happen during cluster instability
+		// (etcd delays, API server issues, network problems).
+		//
+		// During engine upgrades, this is particularly problematic as the cleanup
+		// is intentionally skipped.
+		//
+		// Ref: https://github.com/longhorn/longhorn/issues/12111
+		logrus.WithError(err).Warnf("Replica %v verification failed after creation, initiating cleanup to prevent accumulation", ret.Name)
+		if deleteErr := s.DeleteReplica(ret.Name); deleteErr != nil && !ErrorIsNotFound(deleteErr) {
+			logrus.WithError(deleteErr).Errorf("Failed to cleanup replica %v after verification failure", ret.Name)
+		}
 		return nil, err
 	}
 	ret, ok := obj.(*longhorn.Replica)
@@ -3405,7 +3397,7 @@ func (s *DataStore) IsNodeDownOrDeletedOrDelinquent(nodeName string, volumeName 
 // IsNodeDeleted checks whether the node does not exist by passing in the node name
 func (s *DataStore) IsNodeDeleted(name string) (bool, error) {
 	if name == "" {
-		return false, errors.New("no node name provided to check node down or deleted")
+		return false, errors.New("no node name provided to check node deleted")
 	}
 
 	node, err := s.GetNodeRO(name)
@@ -4075,6 +4067,15 @@ func (s *DataStore) GetSettingOrphanResourceAutoDeletion() (map[types.OrphanReso
 		return nil, err
 	}
 	return resourceTypes, nil
+}
+
+func (s *DataStore) GetSettingBlacklistForAutoDeletePodWhenVolumeDetachedUnexpectedly() (map[string]struct{}, error) {
+	setting, err := s.GetSettingWithAutoFillingRO(types.SettingNameBlacklistForAutoDeletePodWhenVolumeDetachedUnexpectedly)
+	if err != nil {
+		return nil, err
+	}
+
+	return util.SplitStringToMap(setting.Value, ";"), nil
 }
 
 // ResetMonitoringEngineStatus clean and update Engine status

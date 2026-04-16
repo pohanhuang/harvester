@@ -61,6 +61,10 @@ const (
 	KubernetesKindConfigMap             = "ConfigMap"
 	KubernetesKindDaemonSet             = "DaemonSet"
 	KubernetesKindDeployment            = "Deployment"
+	KubernetesKindReplicaSet            = "ReplicaSet"
+	KubernetesKindReplicationController = "ReplicationController"
+	KubernetesKindStatefulSet           = "StatefulSet"
+	KubernetesKindCronJob               = "CronJob"
 	KubernetesKindJob                   = "Job"
 	KubernetesKindPersistentVolume      = "PersistentVolume"
 	KubernetesKindPersistentVolumeClaim = "PersistentVolumeClaim"
@@ -148,9 +152,8 @@ const (
 	DeleteNodeFromLonghorn         = "delete-node-from-longhorn"
 
 	KubernetesStatusLabel = "KubernetesStatus"
-	KubernetesReplicaSet  = "ReplicaSet"
-	KubernetesStatefulSet = "StatefulSet"
-	RecurringJobLabel     = "RecurringJob"
+
+	RecurringJobLabel = "RecurringJob"
 
 	VolumeRecurringJobInfoLabel     = "VolumeRecurringJobInfo"
 	VolumeRecurringJobRestorePrefix = "restored-recurring-job-"
@@ -419,7 +422,7 @@ func EngineBinaryExistOnHostForImage(image string) (bool, error) {
 }
 
 func GetBackingImageManagerName(image, diskUUID string) string {
-	return backingImageManagerPrefix + util.GetStringChecksumSHA256(strings.TrimSpace(fmt.Sprintf("%s-%s", image, diskUUID)))
+	return backingImageManagerPrefix + util.GetStringChecksumSHA224(strings.TrimSpace(fmt.Sprintf("%s-%s", image, diskUUID)))
 }
 
 func GetBackingImageDirectoryName(backingImageName, backingImageUUID string) string {

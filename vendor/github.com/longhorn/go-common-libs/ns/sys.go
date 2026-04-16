@@ -3,7 +3,7 @@ package ns
 import (
 	"syscall"
 
-	"github.com/pkg/errors"
+	"github.com/cockroachdb/errors"
 
 	"github.com/longhorn/go-common-libs/io"
 	"github.com/longhorn/go-common-libs/sys"
@@ -119,6 +119,30 @@ func GetSystemBlockDevices() (result map[string]types.BlockDeviceInfo, err error
 	result, ableToCast = rawResult.(map[string]types.BlockDeviceInfo)
 	if !ableToCast {
 		return nil, errors.Errorf(types.ErrNamespaceCastResultFmt, result, rawResult)
+	}
+	return result, nil
+}
+
+// ResolveBlockDeviceToPhysicalDevice switches to the host namespace and resolves
+// a block device to its physical device.
+func ResolveBlockDeviceToPhysicalDevice(blockDevice string) (result string, err error) {
+	defer func() {
+		err = errors.Wrapf(err, "failed to resolve block device %s to physical device", blockDevice)
+	}()
+
+	fn := func() (any, error) {
+		return sys.ResolveBlockDeviceToPhysicalDevice(blockDevice)
+	}
+
+	rawResult, err := RunFunc(fn, 0)
+	if err != nil {
+		return "", err
+	}
+
+	var ableToCast bool
+	result, ableToCast = rawResult.(string)
+	if !ableToCast {
+		return "", errors.Errorf(types.ErrNamespaceCastResultFmt, result, rawResult)
 	}
 	return result, nil
 }
