@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 
-	. "github.com/longhorn/backupstore/logging"
+	lhbackup "github.com/longhorn/go-common-libs/backup"
+
+	. "github.com/longhorn/backupstore/logging" // nolint: staticcheck
 	"github.com/longhorn/backupstore/types"
 	"github.com/longhorn/backupstore/util"
-	lhbackup "github.com/longhorn/go-common-libs/backup"
 )
 
 type DeltaBackupConfig struct {
@@ -872,9 +873,9 @@ func RestoreDeltaBlockBackup(ctx context.Context, config *DeltaRestoreConfig) (e
 	return nil
 }
 
-func restoreBlockToFile(bsDriver BackupStoreDriver, volumeName string, volDev *os.File, decompression string, blockSize int64, blk BlockMapping) error {
+func restoreBlockToFile(ctx context.Context, bsDriver BackupStoreDriver, volumeName string, volDev *os.File, decompression string, blockSize int64, blk BlockMapping) error {
 	blkFile := getBlockFilePath(volumeName, blk.BlockChecksum)
-	r, err := DecompressAndVerifyWithFallback(bsDriver, blkFile, decompression, blk.BlockChecksum)
+	r, err := DecompressAndVerifyWithFallback(ctx, bsDriver, blkFile, decompression, blk.BlockChecksum)
 	if err != nil {
 		return errors.Wrapf(err, "failed to decompress and verify block %v with checksum %v", blkFile, blk.BlockChecksum)
 	}
@@ -1135,7 +1136,7 @@ func populateBlocksForFullRestore(bsDriver BackupStoreDriver, backup *Backup) (<
 	return blockChan, errChan
 }
 
-func restoreBlock(bsDriver BackupStoreDriver, deltaOps DeltaRestoreOperations, volumeName string, volDev *os.File, block *Block, blockSize int64, progress *progress) error {
+func restoreBlock(ctx context.Context, bsDriver BackupStoreDriver, deltaOps DeltaRestoreOperations, volumeName string, volDev *os.File, block *Block, blockSize int64, progress *progress) error {
 	defer func() {
 		progress.Lock()
 		defer progress.Unlock()
@@ -1149,7 +1150,7 @@ func restoreBlock(bsDriver BackupStoreDriver, deltaOps DeltaRestoreOperations, v
 		return fillZeros(volDev, block.offset, blockSize)
 	}
 
-	return restoreBlockToFile(bsDriver, volumeName, volDev, block.compressionMethod, blockSize,
+	return restoreBlockToFile(ctx, bsDriver, volumeName, volDev, block.compressionMethod, blockSize,
 		BlockMapping{
 			Offset:        block.offset,
 			BlockChecksum: block.blockChecksum,
@@ -1169,7 +1170,7 @@ func restoreBlocks(ctx context.Context, bsDriver BackupStoreDriver, deltaOps Del
 			return
 		}
 		defer func() {
-			volDev.Close()
+			_ = volDev.Close()
 			if err != nil {
 				errChan <- err
 			}
@@ -1188,7 +1189,7 @@ func restoreBlocks(ctx context.Context, bsDriver BackupStoreDriver, deltaOps Del
 					return
 				}
 
-				err = restoreBlock(bsDriver, deltaOps, volumeName, volDev, block, blockSize, progress)
+				err = restoreBlock(ctx, bsDriver, deltaOps, volumeName, volDev, block, blockSize, progress)
 				if err != nil {
 					return
 				}
