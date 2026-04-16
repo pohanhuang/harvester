@@ -15,7 +15,7 @@ replace (
 	github.com/rancher/lasso => github.com/rancher/lasso v0.0.0-20241202185148-04649f379358
 	github.com/rancher/rancher => github.com/rancher/rancher v0.0.0-20250828140533-07a90f09a491
 	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20250828140533-07a90f09a491
-	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20250828140533-07a90f09a491
+	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20260415193004-3558c3274e7f
 	// handle rancher dependenices
 	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
 
