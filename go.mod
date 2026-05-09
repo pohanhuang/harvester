@@ -1,6 +1,6 @@
 module github.com/harvester/harvester
 
-go 1.25.10
+go 1.26.3
 
 replace (
 	github.com/containerd/containerd => github.com/containerd/containerd v1.7.27
