@@ -65,7 +65,7 @@ require (
 	github.com/guonaihong/gout v0.1.3
 	github.com/harvester/go-common v0.0.0-20260119194217-0f17176ce67e
 	github.com/harvester/harvester-network-controller v1.6.0-rc3
-	github.com/harvester/node-manager v1.6.0-rc3
+	github.com/harvester/node-manager v1.8.0
 	github.com/iancoleman/strcase v0.2.0
 	github.com/k3s-io/helm-controller v0.16.1
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
@@ -111,9 +111,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.17.3
-	k8s.io/api v0.34.1
+	k8s.io/api v0.34.5
 	k8s.io/apiextensions-apiserver v0.34.1
-	k8s.io/apimachinery v0.34.1
+	k8s.io/apimachinery v0.34.5
 	k8s.io/apiserver v0.34.1
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/cloud-provider v0.0.0
@@ -339,7 +339,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	k8s.io/cli-runtime v0.34.1 // indirect
-	k8s.io/code-generator v0.34.1 // indirect
+	k8s.io/code-generator v0.34.5 // indirect
 	k8s.io/component-base v0.34.1 // indirect
 	k8s.io/gengo v0.0.0-20250130153323-76c5745d3511 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250604051438-85fd79dbfd9f // indirect
