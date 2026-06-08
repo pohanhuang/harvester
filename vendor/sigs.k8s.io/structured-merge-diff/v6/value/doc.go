@@ -1,8 +1,5 @@
-//go:build !go1.19
-// +build !go1.19
-
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright 2018 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,16 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package exec
-
-import (
-	osexec "os/exec"
-)
-
-func maskErrDotCmd(cmd *osexec.Cmd) *osexec.Cmd {
-	return cmd
-}
-
-func maskErrDot(err error) error {
-	return err
-}
+// Package value defines types for an in-memory representation of yaml or json
+// objects, organized for convenient comparison with a schema (as defined by
+// the sibling schema package). Functions for reading and writing the objects
+// are also provided.
+package value
