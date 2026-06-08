@@ -13,7 +13,7 @@ replace (
 	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 	github.com/operator-framework/operator-lifecycle-manager => github.com/operator-framework/operator-lifecycle-manager v0.0.0-20190128024246-5eb7ae5bdb7a
 	github.com/rancher/lasso => github.com/rancher/lasso v0.0.0-20241202185148-04649f379358
-	github.com/rancher/rancher => github.com/rancher/rancher v0.0.0-20250828140533-07a90f09a491
+	github.com/rancher/rancher => github.com/rancher/rancher v1.6.30
 	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20250828140533-07a90f09a491
 	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20250828140533-07a90f09a491
 	// handle rancher dependenices
@@ -89,7 +89,7 @@ require (
 	github.com/rancher/fleet/pkg/apis v0.12.3
 	github.com/rancher/lasso v0.2.3
 	github.com/rancher/norman v0.7.0
-	github.com/rancher/rancher v0.0.0-20240618122559-b9ec494d4f6f
+	github.com/rancher/rancher v1.6.30
 	github.com/rancher/rancher/pkg/apis v0.0.0
 	github.com/rancher/steve v0.7.17
 	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20250306000150-b1a9781accab
