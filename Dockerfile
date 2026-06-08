@@ -1,4 +1,4 @@
-FROM golang:1.25.7-bookworm AS builder
+FROM golang:1.26.4-bookworm AS builder
 
 ARG CONTAINER_WORKDIR=/go/src/github.com/harvester/harvester
 
