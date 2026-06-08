@@ -108,7 +108,7 @@ require (
 	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/text v0.36.0
-	gopkg.in/yaml.v2 v2.4.0
+	gopkg.in/yaml.v3 v3.0.1
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.17.3
 	k8s.io/api v0.34.1
