@@ -98,7 +98,7 @@ require (
 	github.com/robfig/cron v1.2.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.3
-	github.com/spf13/cobra v1.9.1
+	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
 	github.com/urfave/cli v1.22.17
@@ -297,7 +297,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/spf13/cast v1.9.2 // indirect
-	github.com/spf13/pflag v1.0.7 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stoewer/go-strcase v1.3.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
