@@ -131,7 +131,7 @@ require (
 	sigs.k8s.io/cluster-api v1.9.5
 	sigs.k8s.io/controller-runtime v0.21.0
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8
-	sigs.k8s.io/kind v0.30.0
+	sigs.k8s.io/kind v0.32.0
 	sigs.k8s.io/kustomize/kyaml v0.19.0
 	sigs.k8s.io/yaml v1.6.0
 )
