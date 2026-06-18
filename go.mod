@@ -13,44 +13,44 @@ replace (
 	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20200521150516-05eb9880269c
 	github.com/operator-framework/operator-lifecycle-manager => github.com/operator-framework/operator-lifecycle-manager v0.0.0-20190128024246-5eb7ae5bdb7a
 	github.com/rancher/lasso => github.com/rancher/lasso v0.0.0-20241202185148-04649f379358
-	github.com/rancher/rancher => github.com/rancher/rancher v0.0.0-20250828140533-07a90f09a491
+	github.com/rancher/rancher => github.com/rancher/rancher v0.63.1
 	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20250828140533-07a90f09a491
 	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20250828140533-07a90f09a491
 	// handle rancher dependenices
 	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
 
 	helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.15.1-rancher2
-	k8s.io/api => k8s.io/api v0.33.7
-	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.33.7
-	k8s.io/apimachinery => k8s.io/apimachinery v0.33.7
-	k8s.io/apiserver => k8s.io/apiserver v0.33.7
-	k8s.io/cli-runtime => k8s.io/cli-runtime v0.33.7
-	k8s.io/client-go => k8s.io/client-go v0.33.7
-	k8s.io/cloud-provider => k8s.io/cloud-provider v0.33.7
-	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.33.7
-	k8s.io/code-generator => k8s.io/code-generator v0.33.7
-	k8s.io/component-base => k8s.io/component-base v0.33.7
-	k8s.io/component-helpers => k8s.io/component-helpers v0.33.7
-	k8s.io/controller-manager => k8s.io/controller-manager v0.33.7
-	k8s.io/cri-api => k8s.io/cri-api v0.33.7
-	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.33.7
-	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.33.7
-	k8s.io/endpointslice => k8s.io/endpointslice v0.33.7
-	k8s.io/gengo => k8s.io/gengo v0.0.0-20240826214909-a7b603a56eb7
-	k8s.io/kms => k8s.io/kms v0.33.7
-	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.33.7
-	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.33.7
-	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
-	k8s.io/kube-proxy => k8s.io/kube-proxy v0.33.7
-	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.33.7
-	k8s.io/kubectl => k8s.io/kubectl v0.33.7
-	k8s.io/kubelet => k8s.io/kubelet v0.33.7
-	k8s.io/kubernetes => k8s.io/kubernetes v1.33.7
+	k8s.io/api => k8s.io/api v0.36.2
+	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.36.2
+	k8s.io/apimachinery => k8s.io/apimachinery v0.36.2
+	k8s.io/apiserver => k8s.io/apiserver v0.36.2
+	k8s.io/cli-runtime => k8s.io/cli-runtime v0.36.2
+	k8s.io/client-go => k8s.io/client-go v0.36.2
+	k8s.io/cloud-provider => k8s.io/cloud-provider v0.36.2
+	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.36.2
+	k8s.io/code-generator => k8s.io/code-generator v0.36.2
+	k8s.io/component-base => k8s.io/component-base v0.36.2
+	k8s.io/component-helpers => k8s.io/component-helpers v0.36.2
+	k8s.io/controller-manager => k8s.io/controller-manager v0.36.2
+	k8s.io/cri-api => k8s.io/cri-api v0.36.2
+	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.36.2
+	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.36.2
+	k8s.io/endpointslice => k8s.io/endpointslice v0.36.2
+	k8s.io/gengo => k8s.io/gengo v0.0.0-20260408192533-25e2208e0dc3
+	k8s.io/kms => k8s.io/kms v0.36.2
+	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.36.2
+	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.36.2
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20260603220949-865597e52e25
+	k8s.io/kube-proxy => k8s.io/kube-proxy v0.36.2
+	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.36.2
+	k8s.io/kubectl => k8s.io/kubectl v0.36.2
+	k8s.io/kubelet => k8s.io/kubelet v0.36.2
+	k8s.io/kubernetes => k8s.io/kubernetes v1.36.2
 	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.33.7
-	k8s.io/metrics => k8s.io/metrics v0.33.7
-	k8s.io/mount-utils => k8s.io/mount-utils v0.33.7
-	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.33.7
-	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.33.7
+	k8s.io/metrics => k8s.io/metrics v0.36.2
+	k8s.io/mount-utils => k8s.io/mount-utils v0.36.2
+	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.2
+	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.2
 )
 
 require (
@@ -67,7 +67,7 @@ require (
 	github.com/harvester/harvester-network-controller v1.6.0-rc3
 	github.com/harvester/node-manager v1.6.0-rc3
 	github.com/iancoleman/strcase v0.2.0
-	github.com/k3s-io/helm-controller v0.16.1
+	github.com/k3s-io/helm-controller v0.17.2
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/k8snetworkplumbingwg/whereabouts v0.9.3
 	github.com/kube-logging/logging-operator/pkg/sdk v0.12.0
@@ -84,17 +84,17 @@ require (
 	github.com/openshift/api v0.0.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.82.0
-	github.com/rancher/apiserver v0.7.3
-	github.com/rancher/dynamiclistener v0.7.0
-	github.com/rancher/fleet/pkg/apis v0.12.3
+	github.com/rancher/apiserver v0.9.7
+	github.com/rancher/dynamiclistener v0.8.2
+	github.com/rancher/fleet/pkg/apis v0.15.2
 	github.com/rancher/lasso v0.2.3
-	github.com/rancher/norman v0.7.0
-	github.com/rancher/rancher v0.0.0-20240618122559-b9ec494d4f6f
+	github.com/rancher/norman v0.9.7
+	github.com/rancher/rancher v0.63.1
 	github.com/rancher/rancher/pkg/apis v0.0.0
-	github.com/rancher/steve v0.7.17
-	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20250306000150-b1a9781accab
+	github.com/rancher/steve v0.9.16
+	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20260519183600-f1362a3fe1a8
 	github.com/rancher/wrangler v1.1.2
-	github.com/rancher/wrangler/v3 v3.2.4
+	github.com/rancher/wrangler/v3 v3.7.0
 	github.com/robfig/cron v1.2.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.3
@@ -111,17 +111,17 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.17.3
-	k8s.io/api v0.34.1
-	k8s.io/apiextensions-apiserver v0.34.1
-	k8s.io/apimachinery v0.34.1
-	k8s.io/apiserver v0.34.1
+	k8s.io/api v0.36.2
+	k8s.io/apiextensions-apiserver v0.36.2
+	k8s.io/apimachinery v0.36.2
+	k8s.io/apiserver v0.36.2
 	k8s.io/client-go v12.0.0+incompatible
-	k8s.io/cloud-provider v0.0.0
-	k8s.io/component-helpers v0.33.7
+	k8s.io/cloud-provider v0.36.2
+	k8s.io/component-helpers v0.36.2
 	k8s.io/kube-openapi v0.32.8
-	k8s.io/kubectl v0.32.2
-	k8s.io/kubelet v0.26.13
-	k8s.io/pod-security-admission v0.32.2
+	k8s.io/kubectl v0.36.2
+	k8s.io/kubelet v0.36.2
+	k8s.io/pod-security-admission v0.36.2
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
 	kubevirt.io/api v1.7.0
 	kubevirt.io/client-go v1.7.0
