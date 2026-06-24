@@ -105,12 +105,12 @@ require (
 	go.uber.org/multierr v1.11.0
 	golang.org/x/crypto v0.50.0
 	golang.org/x/exp v0.0.0-20250911091902-df9299821621
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
-	helm.sh/helm/v3 v3.17.3
+	helm.sh/helm/v3 v3.20.2
 	k8s.io/api v0.34.5
 	k8s.io/apiextensions-apiserver v0.34.1
 	k8s.io/apimachinery v0.34.5
