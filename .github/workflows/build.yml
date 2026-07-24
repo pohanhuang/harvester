@@ -31,4 +31,4 @@ jobs:
     uses: ./.github/workflows/build-factory-fake.yml
 
   calling-test-integration:
-    uses: ./.github/workflows/test-integration.yml
+    uses: ./.github/workflows/test-integration-fake.yml
