@@ -1,0 +1,15 @@
+name: Build Factory
+
+on:
+    workflow_call:
+jobs:
+  build-binaries:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+    - name: make pass
+      run: |
+        echo "Build binaries (${matrix.arch})"

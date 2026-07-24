@@ -28,11 +28,7 @@ jobs:
 
   calling-build-factory:
     needs: configure_input_vars
-    uses: ./.github/workflows/build-factory.yml
-    with:
-      image_tag: ${{ needs.configure_input_vars.outputs.branch }}-head
-      build_version: ${{ needs.configure_input_vars.outputs.branch }}-${{ needs.configure_input_vars.outputs.sha_short }}-head
-      iso_folder: ${{ needs.configure_input_vars.outputs.branch }}
+    uses: ./.github/workflows/build-factory-fake.yml
 
   calling-test-integration:
     uses: ./.github/workflows/test-integration.yml
