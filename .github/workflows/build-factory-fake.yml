@@ -11,5 +11,4 @@ jobs:
         arch: [x64, arm64]
     steps:
     - name: make pass
-      run: |
-        echo "Build binaries (${matrix.arch})"
+      run: echo "Build binaries (${{ matrix.arch }})"
