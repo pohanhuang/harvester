@@ -56,8 +56,8 @@ pull_request_rules:
 
 - name: Automatically merge Renovate PRs
   conditions:
-  - check-success="Build binaries (x64)"
-  - check-success="Build binaries (arm64)"
+  - check-success="calling-build-factory / Build binaries (x64)"
+  - check-success="calling-build-factory / Build binaries (arm64)"
   - author = renovate[bot]
   - -conflict
   actions:
