@@ -1,5 +1,7 @@
 package util
 
+import "fmt"
+
 const (
 	prefix                              = "harvesterhci.io"
 	RemovedPVCsAnnotationKey            = prefix + "/removedPersistentVolumeClaims"
@@ -39,6 +41,7 @@ const (
 	AnnotationLastRefreshTime           = prefix + "/lastRefreshTime"
 	AnnotationMacAddressName            = prefix + "/mac-address"
 	AnnotationEnableCPUAndMemoryHotplug = prefix + "/enableCPUAndMemoryHotplug"
+	AnnotationAllowNodeJoin             = prefix + "/allow-node-join"
 
 	AnnotationSkipRancherLoggingAddonWebhookCheck       = prefix + "/skipRancherLoggingAddonWebhookCheck"
 	AnnotationSkipDeschedulerAddonWebhookCheck          = prefix + "/skipDeschedulerAddonWebhookCheck"
@@ -58,6 +61,12 @@ const (
 
 	// AnnotationMigratingPrefix is replaced by AnnotationMigratingNamePrefix, and is kept for compatibility
 	AnnotationMigratingPrefix = AnnotationMigratingNamePrefix
+
+	// AnnotationMigratingCompensation is used to add compensating quota to help already blocked VMIMs, due to insufficient ResourceQuota, to proceed
+	AnnotationMigratingCompensation = prefix + "/migratingCompensation"
+
+	// AnnotationMigratingScalingResyncNeeded is used for ping-pong between vmim_controller and resourcequota_controller
+	AnnotationMigratingScalingResyncNeeded = prefix + "/migratingScalingResyncNeeded"
 
 	// AnnotationInsufficientResourceQuota is indicated the resource is insufficient of Namespace
 	AnnotationInsufficientResourceQuota = prefix + "/insufficient-resource-quota"
@@ -83,6 +92,25 @@ const (
 	AnnotationNodeUpgradePauseMap = prefix + "/node-upgrade-pause-map"
 	NodePause                     = "pause"
 	NodeUnpause                   = "unpause"
+
+	// Annotation for backend storage clone.
+	AnnotationBSCloneStatus       = prefix + "/clone-backend-storage-status"
+	AnnotationBSCloneSourceVM     = prefix + "/clone-backend-storage-source-vm"
+	AnnotationBSCloneRunStrategy  = prefix + "/clone-backend-storage-run-strategy"
+	AnnotationBSCloneActions      = prefix + "/clone-backend-storage-actions"
+	AnnotationBSCloneRetries      = prefix + "/clone-backend-storage-retries"
+	AnnotationBSCloneStartTime    = prefix + "/clone-backend-storage-start-time"
+	AnnotationBSCloneStage        = prefix + "/clone-backend-storage-stage"
+	LabelGeneratedBy              = prefix + "/generated-by"
+	ValueGeneratedByHarvester     = "harvester"
+	BackendStorageJobPrefix       = "backend-storage"
+	CloneInProgress               = "cloning"
+	CloneComplete                 = "cloned"
+	CloneFailed                   = "failed"
+	CloneStagePreCompleted        = "pre-completed"
+	CloneActionRenameEFI          = "rename-efi"
+	CloneActionDeleteEFI          = "delete-efi"
+	CloneActionDeleteTPMRenameEFI = "delete-tpm-and-rename-efi"
 
 	HarvesterManagedNodeLabelKey = prefix + "/managed"
 
@@ -138,9 +166,11 @@ const (
 	AddonValuesAnnotation                    = "harvesterhci.io/addon-defaults"
 
 	// CDI constants
-	CSIProvisionerLVM      = "lvm.driver.harvesterhci.io"
-	CSIProvisionerLonghorn = "driver.longhorn.io"
-	LVMTopologyNodeKey     = "topology.lvm.csi/node"
+	CDIAdditionalCAConfigMapName = "harvester-additional-ca-cdi"
+	CDIAdditionalCAConfigMapKey  = "ca.pem"
+	CSIProvisionerLVM            = "lvm.driver.harvesterhci.io"
+	CSIProvisionerLonghorn       = "driver.longhorn.io"
+	LVMTopologyNodeKey           = "topology.lvm.csi/node"
 
 	// CSI constants
 	CSIProvisionerSecretNameKey      = "csi.storage.k8s.io/provisioner-secret-name"
@@ -149,10 +179,13 @@ const (
 	CSINodePublishSecretNamespaceKey = "csi.storage.k8s.io/node-publish-secret-namespace"
 	CSINodeStageSecretNameKey        = "csi.storage.k8s.io/node-stage-secret-name"
 	CSINodeStageSecretNamespaceKey   = "csi.storage.k8s.io/node-stage-secret-namespace"
+	CSINodeExpandSecretNameKey       = "csi.storage.k8s.io/node-expand-secret-name"
+	CSINodeExpandSecretNamespaceKey  = "csi.storage.k8s.io/node-expand-secret-namespace"
 
-	LabelUpgradeReadMessage          = prefix + "/read-message"
-	LabelUpgradeState                = prefix + "/upgradeState"
-	UpgradeStateLoggingInfraPrepared = "LoggingInfraPrepared"
+	LabelUpgradeReadMessage           = prefix + "/read-message"
+	LabelUpgradeState                 = prefix + "/upgradeState"
+	UpgradeStatePreparingLoggingInfra = "PreparingLoggingInfra"
+	UpgradeStateLoggingInfraPrepared  = "LoggingInfraPrepared"
 
 	AnnotationArchiveName                 = prefix + "/archiveName"
 	LabelUpgradeLog                       = prefix + "/upgradeLog"
@@ -197,6 +230,7 @@ const (
 	MaintainModeStrategyDefault                        = MaintainModeStrategyMigrate
 	HarvesterReportedConditionKey                      = prefix + "/condition"
 	HarvesterReportedConditionMessageKey               = prefix + "/condition-message"
+	ManagedTapBindingName                              = "managedtap"
 )
 
 var (
@@ -214,6 +248,8 @@ var (
 	}
 
 	DefaultHarvesterNamespaceWhiteList = []string{"calico-apiserver", "calico-system", "cattle-alerting", "cattle-csp-adapter-system", "cattle-elemental-system", "cattle-epinio-system", "cattle-externalip-system", "cattle-fleet-local-system", "cattle-fleet-system", "cattle-gatekeeper-system", "cattle-global-data", "cattle-global-nt", "cattle-impersonation-system", "cattle-istio", "cattle-istio-system", "cattle-logging", "cattle-logging-system", "cattle-monitoring-system", "cattle-neuvector-system", "cattle-prometheus", "cattle-provisioning-capi-system", "cattle-resources-system", "cattle-sriov-system", "cattle-system", "cattle-ui-plugin-system", "cattle-windows-gmsa-system", "cert-manager", "cis-operator-system", "fleet-default", "ingress-nginx", "istio-system", "kube-node-lease", "kube-public", "kube-system", "longhorn-system", "rancher-alerting-drivers", "security-scan", "tigera-operator", "harvester-system", "harvester-public", "rancher-vcluster", "cattle-dashboards", "fleet-local", "local", "forklift"}
+
+	StaticIPAnnotationKeyPrefix = fmt.Sprintf("static-ip.%s", prefix)
 )
 
 const (
@@ -251,12 +287,13 @@ const (
 	LastHealthyReplicaKey               = "LastHealthyReplica"
 
 	// moved from storage_network for public usage
-	StorageNetworkAnnotation        = "storage-network.settings.harvesterhci.io"
-	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
-	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
-	HashStorageNetworkAnnotation    = StorageNetworkAnnotation + "/hash"
-	NadStorageNetworkAnnotation     = StorageNetworkAnnotation + "/net-attach-def"
-	OldNadStorageNetworkAnnotation  = StorageNetworkAnnotation + "/old-net-attach-def"
+	StorageNetworkAnnotation         = "storage-network.settings.harvesterhci.io"
+	ReplicaStorageNetworkAnnotation  = StorageNetworkAnnotation + "/replica"
+	PausedStorageNetworkAnnotation   = StorageNetworkAnnotation + "/paused"
+	HashStorageNetworkAnnotation     = StorageNetworkAnnotation + "/hash"
+	NadStorageNetworkAnnotation      = StorageNetworkAnnotation + "/net-attach-def"
+	OldNadStorageNetworkAnnotation   = StorageNetworkAnnotation + "/old-net-attach-def"
+	ExclusiveVlanStorageNetworkLabel = StorageNetworkAnnotation + "/exclusivevlan"
 
 	HashStorageNetworkLabel = HashStorageNetworkAnnotation
 
@@ -309,3 +346,18 @@ const (
 
 	GoArchArm64 = "arm64"
 )
+
+// CSISecretKeyPair groups a CSI secret-name parameter key with its matching namespace key.
+type CSISecretKeyPair struct {
+	NameKey      string
+	NamespaceKey string
+}
+
+// CSIEncryptionSecretKeyPairs lists the CSI parameter key pairs used to reference
+// the encryption secret for a StorageClass, in the order CSI expects them.
+var CSIEncryptionSecretKeyPairs = []CSISecretKeyPair{
+	{CSIProvisionerSecretNameKey, CSIProvisionerSecretNamespaceKey},
+	{CSINodeStageSecretNameKey, CSINodeStageSecretNamespaceKey},
+	{CSINodePublishSecretNameKey, CSINodePublishSecretNamespaceKey},
+	{CSINodeExpandSecretNameKey, CSINodeExpandSecretNamespaceKey},
+}

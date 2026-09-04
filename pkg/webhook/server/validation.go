@@ -31,6 +31,7 @@ import (
 	"github.com/harvester/harvester/pkg/webhook/resources/supportbundle"
 	"github.com/harvester/harvester/pkg/webhook/resources/templateversion"
 	"github.com/harvester/harvester/pkg/webhook/resources/upgrade"
+	"github.com/harvester/harvester/pkg/webhook/resources/upgradelog"
 	"github.com/harvester/harvester/pkg/webhook/resources/version"
 	"github.com/harvester/harvester/pkg/webhook/resources/virtualmachine"
 	"github.com/harvester/harvester/pkg/webhook/resources/virtualmachinebackup"
@@ -67,7 +68,8 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 		node.NewValidator(
 			clients.Core.Node().Cache(),
 			clients.Batch.Job().Cache(),
-			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstance().Cache()),
+			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstance().Cache(),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Upgrade().Cache()),
 		persistentvolumeclaim.NewValidator(
 			clients.Core.PersistentVolumeClaim().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
@@ -134,6 +136,10 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			},
 			string(bearToken),
 		),
+		upgradelog.NewValidator(
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Upgrade().Cache(),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().UpgradeLog().Cache(),
+		),
 		virtualmachinebackup.NewValidator(
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache(),
@@ -174,6 +180,7 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.HarvesterNetworkFactory.Network().V1beta1().VlanStatus().Cache(),
 			clients.LonghornFactory.Longhorn().V1beta2().Node().Cache(),
 			clients.Core.Secret().Cache(),
+			clients.CNIFactory.K8s().V1().NetworkAttachmentDefinition().Cache(),
 		),
 		templateversion.NewValidator(
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineTemplate().Cache(),

@@ -59,6 +59,12 @@ spec:
             type: object
           spec:
             properties:
+              fsFreezeDeadline:
+                description: |-
+                  FsFreezeDeadline specifies how long the guest filesystem may remain frozen
+                  before it is automatically unfrozen during snapshot or backup creation.
+                  A value of 0 means there is no deadline.
+                type: string
               source:
                 description: |-
                   TypedLocalObjectReference contains enough information to let you locate the
@@ -87,6 +93,9 @@ spec:
                 - backup
                 - snapshot
                 type: string
+                x-kubernetes-validations:
+                - message: spec.type is immutable
+                  rule: self == oldSelf
             required:
             - source
             type: object
