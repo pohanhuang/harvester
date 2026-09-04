@@ -64,14 +64,15 @@ func Formatter(request *types.APIRequest, resource *types.RawResource) {
 	resource.AddAction(request, listUnhealthyVM)
 	resource.AddAction(request, maintenancePossible)
 	resource.AddAction(request, powerActionPossible)
-	resource.AddAction(request, enableCPUManager)
-	resource.AddAction(request, disableCPUManager)
 
 	if request.AccessControl.CanUpdate(request, resource.APIObject, resource.Schema) != nil {
 		return
 	}
 
-	if resource.APIObject.Data().String("metadata", "annotations", ctlnode.MaintainStatusAnnotationKey) != "" {
+	resource.AddAction(request, enableCPUManager)
+	resource.AddAction(request, disableCPUManager)
+
+	if resource.APIObject.Data().String("metadata", "annotations", util.MaintainStatusAnnotationKey) != "" {
 		resource.AddAction(request, disableMaintenanceModeAction)
 		resource.AddAction(request, powerAction)
 	} else {
@@ -228,7 +229,7 @@ func (h ActionHandler) disableMaintenanceMode(nodeName string) error {
 		}
 		delete(node.Annotations, drainhelper.DrainAnnotation)
 		delete(node.Annotations, drainhelper.ForcedDrain)
-		delete(node.Annotations, ctlnode.MaintainStatusAnnotationKey)
+		delete(node.Annotations, util.MaintainStatusAnnotationKey)
 	}
 
 	err := h.retryMaintenanceModeUpdate(nodeName, disableMaintaenanceModeFunc, "disable")

@@ -55,6 +55,8 @@ var (
 	AutoRotateRKE2CertsSet                 = NewSetting(AutoRotateRKE2CertsSettingName, InitAutoRotateRKE2Certs())
 	KubeconfigTTL                          = NewSetting(KubeconfigDefaultTokenTTLMinutesSettingName, "0") // "0" is default value to ensure token does not expire
 	LonghornV2DataEngineEnabled            = NewSetting(LonghornV2DataEngineSettingName, "false")
+	LonghornV2DataEngineHugepageEnabled    = NewSetting(LonghornV2DataEngineHugepageSettingName, "true")
+	LonghornV2DataEngineMemorySize         = NewSetting(LonghornV2DataEngineMemorySizeSettingName, "2048")
 	LHIMResources                          = NewSetting(LHIMResourcesSettingName, `{"cpu":{}}`)
 	AdditionalGuestMemoryOverheadRatio     = NewSetting(AdditionalGuestMemoryOverheadRatioName, AdditionalGuestMemoryOverheadRatioDefault)
 	RancherCluster                         = NewSetting(RancherClusterSettingName, "{}")
@@ -67,6 +69,7 @@ var (
 	VMMigrationNetwork                = NewSetting(VMMigrationNetworkSettingName, "")
 	KubeVirtMigration                 = NewSetting(KubeVirtMigrationSettingName, `{"parallelOutboundMigrationsPerNode":2,"parallelMigrationsPerCluster":5,"allowAutoConverge":false,"bandwidthPerMigration":0,"completionTimeoutPerGiB":150,"progressTimeout":150,"unsafeMigrationOverride":false,"allowPostCopy":false,"allowWorkloadDisruption":false,"disableTLS":false,"matchSELinuxLevelOnMigration":false}`)
 	ClusterPodSecurityStandardSetting = NewSetting(ClusterPodSecurityStandardSettingName, `{"enabled":false,"whitelistedNamespacesList":"", "privilegedNamespacesList":"", "restrictedNamespacesList":""}`)
+	TraefikDefaultTLSOptionSetting    = NewSetting(TraefikDefaultTLSOptionsSettingName, `{"minVersion":"VersionTLS12", "maxVersion":"VersionTLS13", "sniStrict":false,"cipherSuites":[],"clientAuth":{"secretNames":[],"clientAuthType":""}}`)
 )
 
 const (
@@ -103,6 +106,8 @@ const (
 	SupportBundleFileNameSettingName                  = "support-bundle-file-name"
 	UpgradeConfigSettingName                          = "upgrade-config"
 	LonghornV2DataEngineSettingName                   = "longhorn-v2-data-engine-enabled"
+	LonghornV2DataEngineHugepageSettingName           = "longhorn-v2-data-engine-hugepage-enabled"
+	LonghornV2DataEngineMemorySizeSettingName         = "longhorn-v2-data-engine-memory-size"
 	LHIMResourcesSettingName                          = "instance-manager-resources"
 	LogLevelSettingName                               = "log-level"
 	AdditionalGuestMemoryOverheadRatioName            = "additional-guest-memory-overhead-ratio"
@@ -121,6 +126,7 @@ const (
 	RancherClusterSettingName                         = "rancher-cluster"
 	KubeVirtMigrationSettingName                      = "kubevirt-migration"
 	ClusterPodSecurityStandardSettingName             = "cluster-pod-security-standard"
+	TraefikDefaultTLSOptionsSettingName               = "traefik-default-tls-options"
 
 	// settings have `default` and `value` string used in many places, replace them with const
 	KeywordDefault = "default"

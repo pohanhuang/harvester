@@ -13,15 +13,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	k8suser "k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	kubevirtutil "kubevirt.io/kubevirt/pkg/virt-operator/util"
+
+	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 
 	harvesterv1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	"github.com/harvester/harvester/pkg/controller/master/migration"
 	"github.com/harvester/harvester/pkg/generated/clientset/versioned/fake"
 	"github.com/harvester/harvester/pkg/util"
 	"github.com/harvester/harvester/pkg/util/fakeclients"
-	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 )
 
 func TestMigrateAction(t *testing.T) {
@@ -1424,7 +1427,7 @@ func Test_isVmNetworkHotpluggable(t *testing.T) {
 
 func TestInsertCdRomVolumeAction(t *testing.T) {
 	vmName := "vm1"
-	vmNamespace := "default"
+	vmNamespace := "test"
 	vm := &kubevirtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      vmName,
@@ -1462,7 +1465,7 @@ func TestInsertCdRomVolumeAction(t *testing.T) {
 	vmImage := &harvesterv1.VirtualMachineImage{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      vmImageName,
-			Namespace: vmNamespace,
+			Namespace: vmImageNamespace,
 		},
 		Status: harvesterv1.VirtualMachineImageStatus{
 			VirtualSize:      25165824,
@@ -1470,20 +1473,28 @@ func TestInsertCdRomVolumeAction(t *testing.T) {
 		},
 	}
 
-	clientset := fake.NewSimpleClientset(vm, vmImage)
+	newHandler := func(sarAllowed bool) *vmActionHandler {
+		clientset := fake.NewSimpleClientset(vm.DeepCopy(), vmImage.DeepCopy())
 
-	handler := &vmActionHandler{
-		vmClient:     fakeclients.VirtualMachineClient(clientset.KubevirtV1().VirtualMachines),
-		vmCache:      fakeclients.VirtualMachineCache(clientset.KubevirtV1().VirtualMachines),
-		vmImageCache: fakeclients.VirtualMachineImageCache(clientset.HarvesterhciV1beta1().VirtualMachineImages),
+		return &vmActionHandler{
+			clientSet:    fakeclients.SARClientSet(sarAllowed),
+			vmClient:     fakeclients.VirtualMachineClient(clientset.KubevirtV1().VirtualMachines),
+			vmCache:      fakeclients.VirtualMachineCache(clientset.KubevirtV1().VirtualMachines),
+			vmImageCache: fakeclients.VirtualMachineImageCache(clientset.HarvesterhciV1beta1().VirtualMachineImages),
+		}
 	}
 
 	input := InsertCdRomVolumeActionInput{
 		DeviceName: "cdrom1",
 		ImageName:  vmImageNamespace + "/" + vmImageName,
 	}
+	requester := &k8suser.DefaultInfo{
+		Name:   "test-user",
+		Groups: []string{"test-group"},
+	}
 
-	err := handler.insertCdRomVolume(vmName, vmNamespace, input)
+	handler := newHandler(true)
+	err := handler.insertCdRomVolume(context.Background(), requester, vmName, vmNamespace, input)
 	assert.Nil(t, err, "insertCdRomVolume shouldn't return error")
 
 	vmUpdated, err := handler.vmCache.Get(vmNamespace, vmName)
@@ -1495,6 +1506,15 @@ func TestInsertCdRomVolumeAction(t *testing.T) {
 	entries, err := util.UnmarshalVolumeClaimTemplates(volumeClaimTemplates)
 	assert.Nil(t, err, "Should unmarshal volumeClaimTemplates annotation correctly")
 	assert.Len(t, entries, 1, "Should add to volumeClaimTemplates annotation")
+
+	handler = newHandler(false)
+	err = handler.insertCdRomVolume(context.Background(), requester, vmName, vmNamespace, input)
+	assert.NotNil(t, err, "insertCdRomVolume should fail when the user cannot access the image")
+	assert.Contains(t, err.Error(), `user "test-user" is not allowed to access image default/image-8jpqp`)
+
+	vmUpdated, err = handler.vmCache.Get(vmNamespace, vmName)
+	assert.Nil(t, err, "Should get the unchanged VM")
+	assert.Len(t, vmUpdated.Spec.Template.Spec.Volumes, 0, "Should not hot-plug a volume without image access")
 }
 
 func TestEjectCdRomVolumeAction(t *testing.T) {
@@ -1586,4 +1606,225 @@ func TestEjectCdRomVolumeAction(t *testing.T) {
 
 	_, err = pvcCache.Get(pvcNamespace, pvcName)
 	assert.True(t, apierrors.IsNotFound(err), "Should delete pvc")
+}
+
+func TestBuildVirtualMachineRestore(t *testing.T) {
+	tests := []struct {
+		name        string
+		vmName      string
+		vmNamespace string
+		input       RestoreInput
+	}{
+		{
+			name:        "builds restore with default flags",
+			vmName:      "vm-default",
+			vmNamespace: "ns-default",
+			input: RestoreInput{
+				Name:       "restore-default",
+				BackupName: "backup-default",
+			},
+		},
+		{
+			name:        "builds restore with keep mac and halt flags",
+			vmName:      "vm-flags",
+			vmNamespace: "ns-flags",
+			input: RestoreInput{
+				Name:             "restore-flags",
+				BackupName:       "backup-flags",
+				KeepMacAddress:   true,
+				HaltAfterRestore: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildVirtualMachineRestore(tt.vmName, tt.vmNamespace, tt.input)
+			assert.NotNil(t, got)
+			assert.Equal(t, tt.vmName, got.Spec.Target.Name)
+			assert.Equal(t, tt.vmNamespace, got.Namespace)
+			assert.Equal(t, tt.vmNamespace, got.Spec.VirtualMachineBackupNamespace)
+			assert.Equal(t, tt.input.Name, got.Name)
+			assert.Equal(t, tt.input.BackupName, got.Spec.VirtualMachineBackupName)
+			assert.Equal(t, tt.input.KeepMacAddress, got.Spec.KeepMacAddress)
+			assert.Equal(t, tt.input.HaltAfterRestore, got.Spec.HaltAfterRestore)
+		})
+	}
+}
+
+func TestDetermineCloneAction(t *testing.T) {
+	tests := []struct {
+		name     string
+		cloneVM  *kubevirtv1.VirtualMachine
+		expected string
+	}{
+		{
+			name: "clone has both EFI and TPM - should rename EFI",
+			cloneVM: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "clone-with-efi-and-tpm",
+					Namespace: "default",
+				},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+						Spec: kubevirtv1.VirtualMachineInstanceSpec{
+							Domain: kubevirtv1.DomainSpec{
+								Firmware: &kubevirtv1.Firmware{
+									Bootloader: &kubevirtv1.Bootloader{
+										EFI: &kubevirtv1.EFI{
+											Persistent: ptr.To(true),
+										},
+									},
+								},
+								Devices: kubevirtv1.Devices{
+									TPM: &kubevirtv1.TPMDevice{
+										Persistent: ptr.To(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: util.CloneActionRenameEFI,
+		},
+		{
+			name: "clone has EFI only (no TPM) - should delete TPM from cloned PVC",
+			cloneVM: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "clone-with-efi-only",
+					Namespace: "default",
+				},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+						Spec: kubevirtv1.VirtualMachineInstanceSpec{
+							Domain: kubevirtv1.DomainSpec{
+								Firmware: &kubevirtv1.Firmware{
+									Bootloader: &kubevirtv1.Bootloader{
+										EFI: &kubevirtv1.EFI{
+											Persistent: ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: util.CloneActionDeleteTPMRenameEFI,
+		},
+		{
+			name: "clone has TPM only (no EFI) - should delete EFI from cloned PVC",
+			cloneVM: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "clone-with-tpm-only",
+					Namespace: "default",
+				},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+						Spec: kubevirtv1.VirtualMachineInstanceSpec{
+							Domain: kubevirtv1.DomainSpec{
+								Devices: kubevirtv1.Devices{
+									TPM: &kubevirtv1.TPMDevice{
+										Persistent: ptr.To(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: util.CloneActionDeleteEFI,
+		},
+		{
+			name: "clone has neither EFI nor TPM - should not create post-clone job",
+			cloneVM: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "clone-without-efi-and-tpm",
+					Namespace: "default",
+				},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{},
+				},
+			},
+			expected: "",
+		},
+		{
+			name: "clone has CBT only - should not create post-clone job",
+			cloneVM: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "clone-with-cbt-only",
+					Namespace: "default",
+				},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					ChangedBlockTracking: &kubevirtv1.ChangedBlockTrackingStatus{
+						State: kubevirtv1.ChangedBlockTrackingEnabled,
+					},
+				},
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &vmActionHandler{}
+			got := handler.determineCloneAction(tt.cloneVM)
+			assert.Equal(t, tt.expected, got, "case %q", tt.name)
+		})
+	}
+}
+
+func TestCreateVMBackup(t *testing.T) {
+	vmName := "vm1"
+	vmNamespace := "default"
+
+	testCases := []struct {
+		name  string
+		input BackupInput
+	}{
+		{
+			name: "Create VM backup w/ FsFreezeDeadline (Infinite)",
+			input: BackupInput{
+				Name:             "backup1",
+				FsFreezeDeadline: ptr.To(metav1.Duration{Duration: 0 * time.Second}),
+			},
+		},
+		{
+			name: "Create VM backup w/ FsFreezeDeadline (5m)",
+			input: BackupInput{
+				Name:             "backup2",
+				FsFreezeDeadline: ptr.To(metav1.Duration{Duration: 5 * time.Minute}),
+			},
+		},
+		{
+			name: "Create VM backup w/o FsFreezeDeadline",
+			input: BackupInput{
+				Name: "backup3",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset()
+			handler := &vmActionHandler{
+				backupClient: fakeclients.VMBackupClient(clientset.HarvesterhciV1beta1().VirtualMachineBackups),
+			}
+
+			err := handler.createVMBackup(vmName, vmNamespace, tc.input)
+			assert.NoError(t, err)
+
+			backup, err := clientset.HarvesterhciV1beta1().VirtualMachineBackups(vmNamespace).Get(context.TODO(), tc.input.Name, metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.input.Name, backup.Name)
+			assert.Equal(t, vmNamespace, backup.Namespace)
+			assert.Equal(t, vmName, backup.Spec.Source.Name)
+			assert.Equal(t, harvesterv1.Backup, backup.Spec.Type)
+			assert.Equal(t, tc.input.FsFreezeDeadline, backup.Spec.FsFreezeDeadline)
+		})
+	}
 }

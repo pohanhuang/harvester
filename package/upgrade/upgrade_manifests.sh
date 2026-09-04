@@ -132,12 +132,13 @@ wait_managed_chart() {
     current_observed_generation=$(echo "$current_chart" | yq e '.status.observedGeneration' -)
     current_state=$(echo "$current_chart" | yq e '.status.display.state' -)
     current_ready_clusters=$(echo "$current_chart" | yq e '.status.display.readyClusters' -)
-    echo "Current version: $current_version, Current ready clusters: $current_ready_clusters, Current state: $current_state, Current generation: $current_observed_generation"
+    current_unavailable=$(echo "$current_chart" | yq e '.status.unavailable' -)
+    echo "Current version: $current_version, Current ready clusters: $current_ready_clusters, Current state: $current_state, Current generation: $current_observed_generation, Current unavailable: $current_unavailable"
 
     if [ "$current_version" = "$version" ]; then
       if [ "$current_observed_generation" -gt "$generation" ]; then
         summary_state=$(echo "$current_chart" | yq e ".status.summary.$state" -)
-        if [ "$summary_state" = "1" ]; then
+        if [ "$summary_state" = "1" -a "$current_unavailable" = "0" ]; then
           break
         fi
       fi
@@ -532,31 +533,48 @@ EOF
 }
 
 wait_capi_cluster() {
-  # Wait for cluster to settle down
+  # Wait for the CAPI cluster to be Provisioned and fully reconciled
+  # (status.observedGeneration == metadata.generation), held stable for
+  # several consecutive observations to allow controllers like Rancher
+  # Turtles to complete a takeover/reconcile burst
   namespace=$1
   name=$2
-  generation=$3
+
+  local required_stable_seconds=30
+  local stable_since=""
 
   while [ true ]; do
-    unset localcluster
     local localcluster=$(kubectl get clusters.cluster.x-k8s.io $name -n $namespace -o yaml)
     if [[ -z ${localcluster} ]]; then
       echo "failed to get CAPI cluster $namespace/$name, retry..."
+      stable_since=""
       sleep 5
       continue
     fi
 
-    current_generation=$(echo "$localcluster" | yq e '.status.observedGeneration' -)
-    current_phase=$(echo "$localcluster" | yq e '.status.phase' -)
+    local current_metadata_generation=$(echo "$localcluster" | yq e '.metadata.generation' -)
+    local current_observed_generation=$(echo "$localcluster" | yq e '.status.observedGeneration' -)
+    local current_phase=$(echo "$localcluster" | yq e '.status.phase' -)
 
-    if [ "$current_generation" -gt "$generation" ]; then
-      if [ "$current_phase" = "Provisioned" ]; then
-        echo "CAPI cluster $namespace/$name is provisioned (current generation: $current_generation)."
+    if [ "$current_observed_generation" = "$current_metadata_generation" ] && [ "$current_phase" = "Provisioned" ]; then
+      if [ -z "$stable_since" ]; then
+        stable_since=$(date +%s)
+      fi
+      local elapsed=$(( $(date +%s) - stable_since ))
+      if [ "$elapsed" -ge "$required_stable_seconds" ]; then
+        echo "CAPI cluster $namespace/$name is provisioned and stable for ${elapsed}s (current generation: $current_metadata_generation)."
         break
       fi
+      echo "CAPI cluster $namespace/$name appears ready (phase=$current_phase, generation=$current_metadata_generation), stability ${elapsed}s/${required_stable_seconds}s..."
+    else
+      if [ -n "$stable_since" ]; then
+        echo "CAPI cluster $namespace/$name reconcile in progress (phase=$current_phase, observed=$current_observed_generation, metadata=$current_metadata_generation), resetting stability timer."
+      else
+        echo "Waiting for CAPI cluster $namespace/$name to be provisioned (phase=$current_phase, observed=$current_observed_generation, metadata=$current_metadata_generation)..."
+      fi
+      stable_since=""
     fi
 
-    echo "Waiting for CAPI cluster $namespace/$name to be provisioned (current phase: $current_phase, current generation: $current_generation)..."
     sleep 5
   done
 }
@@ -699,13 +717,56 @@ get_running_rancher_version() {
 
 get_cluster_repo_index_download_time() {
   local output_type=$1
-  local iso_time=$(kubectl get clusterrepos.catalog.cattle.io harvester-charts -ojsonpath='{.status.downloadTime}')
+  local repo_name=${2:-harvester-charts}
+  local iso_time=$(kubectl get clusterrepos.catalog.cattle.io "$repo_name" -ojsonpath='{.status.downloadTime}')
 
   if [ "$output_type" = "epoch" ]; then
     date -d"${iso_time}" +%s
   else
     echo $iso_time
   fi
+}
+
+# Force refresh a clusterrepo catalog index by setting forceUpdate to a past timestamp
+# See https://github.com/rancher/rancher/blob/47c22388c5451c74f55e162d1e60b4e6dcfd0800/pkg/controllers/dashboard/helm/repo.go#L290-L294
+# for why this would trigger a force upgrade
+force_refresh_clusterrepo() {
+  local repo_name=$1
+  echo "Force refreshing clusterrepo $repo_name catalog index..."
+
+  # ensure the clusterrepo exists
+  until kubectl get clusterrepos.catalog.cattle.io "$repo_name" &>/dev/null; do
+    echo "Waiting for clusterrepo $repo_name to exist..."
+    sleep 5
+  done
+
+  # ensure .status.downloadTime is not empty
+  local last_repo_download_time
+  while true; do
+    last_repo_download_time=$(get_cluster_repo_index_download_time "" "$repo_name")
+    [[ -n "$last_repo_download_time" ]] && break
+    echo "Waiting for clusterrepo $repo_name to have a downloadTime..."
+    sleep 5
+  done
+
+  local force_update_time=$(date -d"${last_repo_download_time} + 1 seconds" --iso-8601=seconds)
+  # Sleep 1 sec to ensure force_update_time is always in the past
+  sleep 1
+
+  kubectl patch clusterrepos.catalog.cattle.io "$repo_name" --type merge -p "{\"spec\":{\"forceUpdate\":\"$force_update_time\"}}"
+
+  local force_update_epoch=$(date -d"${force_update_time}" +%s)
+  while true; do
+    local current_epoch
+    current_epoch=$(get_cluster_repo_index_download_time epoch "$repo_name")
+    echo "Current clusterrepo $repo_name catalog index download time: $current_epoch  force update time: $force_update_epoch"
+    if [[ -n "$current_epoch" ]] && [[ "$current_epoch" -ge "$force_update_epoch" ]]; then
+      break
+    fi
+    echo "Waiting for clusterrepo $repo_name catalog index update..."
+    sleep 5
+  done
+  echo "Clusterrepo $repo_name catalog index updated."
 }
 
 # The legacy capi webhooks will cause Rancher pod prints errors after upgraded to v1.8.0
@@ -765,8 +826,7 @@ upgrade_rancher() {
   fi
 
   # Wait for Rancher to settle down before start upgrading, just in case
-  wait_capi_cluster fleet-local local 0
-  pre_generation=$(kubectl get clusters.cluster.x-k8s.io local -n fleet-local -o=jsonpath="{.status.observedGeneration}")
+  wait_capi_cluster fleet-local local
 
   # XXX Workaround for https://github.com/rancher/rancher/issues/36914
   # Delete all rancher's clusterrepos so they will be updated by the new version rancher pods
@@ -778,7 +838,7 @@ upgrade_rancher() {
 
   save_fleet_controller_configmap
 
-  yq -i '.features = "multi-cluster-management=false,multi-cluster-management-agent=false,managed-system-upgrade-controller=false"' values.yaml
+  yq -i '.features = "multi-cluster-management=false,multi-cluster-management-agent=false,managed-system-upgrade-controller=false,crt-token-ttl-rotation=false"' values.yaml
 
   if [[ "$imageMode" == "legacy" ]]; then
     echo "Rancher image values are in legacy mode, convert them to new mode"
@@ -802,6 +862,9 @@ upgrade_rancher() {
     echo "Wait for Rancher to be upgraded to $REPO_RANCHER_VERSION..."
     sleep 5
   done
+
+  echo "Force refresh rancher-charts clusterrepo..."
+  force_refresh_clusterrepo rancher-charts
 
   echo "Wait for Rancher dependencies helm releases..."
   wait_helm_release cattle-fleet-system fleet fleet-$REPO_FLEET_CHART_VERSION $REPO_FLEET_APP_VERSION deployed
@@ -830,7 +893,7 @@ upgrade_rancher() {
   # v0.10.1: https://github.com/rancher/fleet/blob/62de718a20e1377d5a8702876077762ed9a37f27/internal/cmd/controller/agentmanagement/agent/manifest.go#L152-L161
   wait_rollout_with_loop cattle-fleet-local-system deployment fleet-agent
   echo "Wait for cluster settling down..."
-  wait_capi_cluster fleet-local local $pre_generation
+  wait_capi_cluster fleet-local local
 
   # Following patch is not enough
   wait_rollout_with_loop cattle-fleet-local-system deployment fleet-agent
@@ -900,24 +963,7 @@ EOF
     sleep 5
   done
 
-  # Force update cluster repo catalog index
-  last_repo_download_time=$(get_cluster_repo_index_download_time)
-  # See https://github.com/rancher/rancher/blob/47c22388c5451c74f55e162d1e60b4e6dcfd0800/pkg/controllers/dashboard/helm/repo.go#L290-L294
-  # for why this would trigger a force upgrade
-  force_update_time=$(date -d"${last_repo_download_time} + 1 seconds" --iso-8601=seconds)
-  # Sleep 1 sec to ensure force_update_time is always in the past
-  sleep 1
-
-  cat >catalog_cluster_repo.yaml <<EOF
-spec:
-  forceUpdate: "$force_update_time"
-EOF
-  kubectl patch clusterrepos.catalog.cattle.io harvester-charts --patch-file ./catalog_cluster_repo.yaml --type merge
-
-  until [ $(get_cluster_repo_index_download_time epoch) -ge $(date -d"${force_update_time}" +%s) ]; do
-    echo "Waiting for cluster repo catalog index update..."
-    sleep 5
-  done
+  force_refresh_clusterrepo harvester-charts
 }
 
 ensure_ingress_class_name() {
@@ -989,50 +1035,6 @@ patch_longhorn_settings() {
   yq -e '.spec.values.longhorn' $target || echo "fail to get info .spec.values.longhorn"
 }
 
-patch_kubevirt_compare_patches() {
-  local target=$1
-  local json_pointer="/spec/workloadUpdateStrategy/workloadUpdateMethods"
-  # patch diff compare patches to avoid complaining kubevirt resource is modified
-
-  # Check if the kubevirt comparePatches entry already exists
-  local EXIT_CODE=0
-  yq -e '.spec.diff.comparePatches[] | select(.apiVersion == "kubevirt.io/v1" and .kind == "KubeVirt" and .name == "kubevirt")' $target > /dev/null 2>&1 || EXIT_CODE=$?
-
-  if [ $EXIT_CODE != 0 ]; then
-    echo "Adding kubevirt comparePatches entry to $target"
-    # Ensure spec.diff.comparePatches exists as an array
-    yq -i '.spec.diff.comparePatches = .spec.diff.comparePatches // []' $target
-    # Add the kubevirt entry
-    JSON_POINTER=$json_pointer yq -i '.spec.diff.comparePatches += [{"apiVersion": "kubevirt.io/v1", "kind": "KubeVirt", "name": "kubevirt", "jsonPointers": [strenv(JSON_POINTER)]}]' $target
-  else
-    # Entry exists, check if the specific jsonPointer is already in the array
-    local POINTER_EXISTS=0
-    JSON_POINTER=$json_pointer yq -e '.spec.diff.comparePatches[] | select(.apiVersion == "kubevirt.io/v1" and .kind == "KubeVirt" and .name == "kubevirt") | .jsonPointers[] | select(. == strenv(JSON_POINTER))' $target > /dev/null 2>&1 || POINTER_EXISTS=$?
-
-    if [ $POINTER_EXISTS != 0 ]; then
-      echo "kubevirt comparePatches entry exists but jsonPointer $json_pointer not found, adding it"
-      # Find the index of the kubevirt entry and append the jsonPointer
-      JSON_POINTER=$json_pointer yq -i '(.spec.diff.comparePatches[] | select(.apiVersion == "kubevirt.io/v1" and .kind == "KubeVirt" and .name == "kubevirt") | .jsonPointers) += [strenv(JSON_POINTER)]' $target
-    else
-      echo "kubevirt comparePatches entry with jsonPointer $json_pointer already exists in $target, skip adding"
-    fi
-  fi
-}
-
-disable_kubevirt_live_migrate_workload_update() {
-  echo "Setting kubevirt workloadUpdateMethods to empty array"
-
-  local kubevirt_patch_file="kubevirt-workload-update-patch.yaml"
-  cat > ${kubevirt_patch_file} <<EOF
-spec:
-  workloadUpdateStrategy:
-    workloadUpdateMethods: []
-EOF
-
-  kubectl patch kubevirts.kubevirt.io kubevirt -n harvester-system --patch-file ${kubevirt_patch_file} --type merge
-  rm -f ${kubevirt_patch_file}
-}
-
 upgrade_managedchart_harvester_crd() {
   echo "Upgrading Harvester CRD managedchart fleet-local/harvester-crd"
 
@@ -1058,6 +1060,69 @@ EOF
   wait_managed_chart fleet-local harvester-crd $REPO_HARVESTER_CHART_VERSION $pre_generation_harvester_crd ready
 }
 
+# update values to disable workload live migration. The managedchart is unpaused to propogate the change.
+# pause the managedchart again for real harvester managedchart upgrade later.
+disable_kubevirt_workload_live_migration() {
+  echo "Checking KubeVirt workload live migration settings"
+
+  local chart_yaml
+  chart_yaml=$(kubectl get managedcharts.management.cattle.io harvester -n fleet-local -o yaml)
+
+  # Use tojson to get a clean JSON representation: "null" if key absent, "[]" if empty, or the actual value
+  local methods_json
+  methods_json=$(echo "$chart_yaml" | yq e '.spec.values.kubevirt.spec.workloadUpdateStrategy.workloadUpdateMethods | tojson' -)
+
+  # Backup original value to the upgrade annotation (only write once for idempotency).
+  # Must check key existence rather than the value, because a legitimate backup value of "null"
+  # (meaning the key was absent before the upgrade) is indistinguishable from a missing annotation
+  # when using plain yq value extraction (both produce the string "null").
+  local annotation_key="harvesterhci.io/kubevirt-workload-update-methods"
+  local annotation_exists
+  annotation_exists=$(kubectl get upgrades.harvesterhci.io "$HARVESTER_UPGRADE_NAME" -n harvester-system -o yaml | \
+    yq e "(.metadata.annotations // {}) | has(\"$annotation_key\")" -)
+  if [ "$annotation_exists" != "true" ]; then
+    echo "Backing up workloadUpdateMethods value '$methods_json' to upgrade annotation"
+    kubectl annotate upgrades.harvesterhci.io "$HARVESTER_UPGRADE_NAME" -n harvester-system \
+      "${annotation_key}=${methods_json}"
+  fi
+
+  if [ "$methods_json" = "[]" ]; then
+    echo "KubeVirt workloadUpdateMethods is already empty. No patching needed."
+    return 0
+  fi
+
+  echo "KubeVirt workloadUpdateMethods is '$methods_json'. Patching to []..."
+
+  local pre_generation
+  pre_generation=$(echo "$chart_yaml" | yq e '.status.observedGeneration' -)
+
+  local current_version
+  current_version=$(echo "$chart_yaml" | yq e '.spec.version' -)
+
+  local hpatch=harvester-kubevirt-wum.yaml
+  cat >${hpatch} <<EOF
+spec:
+  values:
+    kubevirt:
+      spec:
+        workloadUpdateStrategy:
+          workloadUpdateMethods: []
+EOF
+
+  update_managedchart_patch_file_annotations ${hpatch} ${current_version}
+  update_managedchart_patch_file_unpause ${hpatch}
+  update_managedchart_patch_file_timeoutseconds ${hpatch} fleet-local harvester
+  echo "The final content of harvester kubevirt workload update methods patch file"
+  cat ${hpatch}
+
+  echo "Patching..."
+  kubectl patch managedcharts.management.cattle.io harvester -n fleet-local --patch-file ./${hpatch} --type merge
+  wait_managed_chart fleet-local harvester "$current_version" "$pre_generation" ready
+
+  echo "Pause the harvester managedchart for later upgrade"
+  pause_managed_chart harvester "true"
+}
+
 upgrade_managedchart_harvester() {
   echo "Upgrading Harvester managedchart fleet-local/harvester"
 
@@ -1069,8 +1134,6 @@ metadata:
   name: harvester
   namespace: fleet-local
 EOF
-
-  disable_kubevirt_live_migrate_workload_update
 
   kubectl get managedcharts.management.cattle.io -n fleet-local harvester -o yaml | yq e '{"spec": .spec}' - >>${hpatch}
   pre_generation_harvester=$(kubectl get managedcharts.management.cattle.io harvester -n fleet-local -o=jsonpath='{.status.observedGeneration}')
@@ -1084,7 +1147,6 @@ EOF
   fi
 
   patch_longhorn_settings ${hpatch}
-  patch_kubevirt_compare_patches ${hpatch}
 
   update_managedchart_patch_file_annotations ${hpatch} $REPO_HARVESTER_CHART_VERSION
   update_managedchart_patch_file_unpause ${hpatch}
@@ -1105,7 +1167,6 @@ upgrade_harvester() {
   cd $UPGRADE_TMP_DIR/harvester
 
   upgrade_managedchart_harvester_crd
-
   upgrade_managedchart_harvester
 }
 
@@ -1522,6 +1583,109 @@ migrate_longhorn_v1beta1_crds() {
       -p "$(kubectl get validatingwebhookconfiguration longhorn-webhook-validator -o json | jq '.webhooks[0].rules |= map(if .apiGroups == ["longhorn.io"] and .resources == ["settings"] then .operations |= (. + ["UPDATE"] | unique) else . end)')"
 }
 
+patch_rke2_traefik_config() {
+  # This patch is only needed when the pre-upgrade cluster version is v1.8.*
+  if [[ ! "$UPGRADE_PREVIOUS_VERSION" =~ ^v1\.8[.-][a-zA-Z0-9.-]+$ ]]; then
+    echo "Skip check and apply of default rke2-traefik helm chart config: pre-upgrade version is not v1.8.x (actual: ${UPGRADE_PREVIOUS_VERSION})"
+    return
+  fi
+
+  echo "Check and apply default rke2-traefik helm chart config"
+
+  local name="rke2-traefik"
+  local namespace="kube-system"
+  local manifest="$UPGRADE_TMP_DIR/rke2-traefik-helmchartconfig.yaml"
+
+  mkdir -p "$UPGRADE_TMP_DIR"
+
+  # 1. Prepare Manifest
+  cat > "$manifest" <<EOF
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: $name
+  namespace: $namespace
+spec:
+  valuesContent: |-
+    logs:
+      access:
+        enabled: "true"
+    service:
+      spec:
+        type: LoadBalancer
+    additionalArguments:
+    - --entryPoints.websecure.transport.respondingTimeouts.readTimeout=30m
+    - --entryPoints.websecure.transport.respondingTimeouts.writeTimeout=30m
+EOF
+
+  # 2. Check if the resource exists
+  local EXIT_CODE=0
+  # Using a global variable to ensure EXIT_CODE is captured correctly under 'set -e'
+  rke2_traefik_chart_config_output=$(kubectl get helmchartconfig "${name}" -n "${namespace}" -o yaml 2>&1) || EXIT_CODE=$?
+
+  if [[ $EXIT_CODE -ne 0 ]]; then
+    if [[ "$rke2_traefik_chart_config_output" == *"NotFound"* || "$rke2_traefik_chart_config_output" == *"not found"* ]]; then
+      echo "Resource '$name' not found. Creating..."
+      kubectl apply -f "$manifest"
+      return 0
+    else
+      # Catch critical errors (RBAC, API timeouts, etc.)
+      echo "CRITICAL ERROR: kubectl check failed with: $rke2_traefik_chart_config_output EXIT_CODE:$EXIT_CODE"
+      return 1
+    fi
+  fi
+
+  # 3. Print existing resource configuration
+  echo "Resource helmchartconfig '${name}' exists:"
+  echo "--------------------------------------------------"
+  echo "${rke2_traefik_chart_config_output}"
+  echo "--------------------------------------------------"
+
+  # Note: Extracting and deep-merging spec.valuesContent (e.g., using yq to preserve custom Helm values)
+  # is intentionally skipped. Because valuesContent is an embedded YAML string inside the CRD, a proper merge
+  # requires parsing the raw string, performing a key-by-key YAML merge, and re-serializing it back into the spec.
+  # Since this patch is designed to initialize the canonical HelmChartConfig manifest matching the v1.9.0 default
+  # definition when missing, if the resource already exists, we assume its content is up to date and require no further changes.
+}
+
+# Since Rancher v2.15.0, tls-internal-cn-allowed-services is needed to be
+# configured properly to prevent TLS certificate flapping
+# https://github.com/harvester/harvester/issues/11338
+apply_tls_internal_cn_allowed_services_setting() {
+  if [[ ! "$UPGRADE_PREVIOUS_VERSION" =~ ^v1\.8[.-][a-zA-Z0-9.-]+$ ]]; then
+    echo "Skip set tls-internal-cn-allowed-services if you are not upgrade from v1.8.x, current version: $UPGRADE_PREVIOUS_VERSION"
+    return
+  fi
+
+  local manifest="$UPGRADE_TMP_DIR/tls-internal-cn-allowed-services-settings.yaml"
+  mkdir -p "$UPGRADE_TMP_DIR"
+  cat > "$manifest" <<EOF
+apiVersion: management.cattle.io/v3
+customized: false
+default: ""
+kind: Setting
+metadata:
+  name: tls-internal-cn-allowed-services
+source: ""
+value: "kube-system/ingress-expose,kube-system/rke2-traefik"
+EOF
+  echo "The content of ${manifest}"
+  cat ${manifest}
+  kubectl apply -f "${manifest}"
+}
+
+# Since Rancher v2.15.0, this annotation is needed on management cluster such that
+# system-agent-upgrader can complete successfully.
+# https://github.com/harvester/harvester/issues/11336
+annotate_management_cluster_provisioning_administrated() {
+  if [[ ! "$UPGRADE_PREVIOUS_VERSION" =~ ^v1\.8[.-][a-zA-Z0-9.-]+$ ]]; then
+    echo "Skip patch management cluster provisioning administrated if you are not upgrade from v1.8.x, current version: $UPGRADE_PREVIOUS_VERSION"
+    return
+  fi
+  echo "Annotate management cluster 'local' with provisioning.cattle.io/administrated=true"
+  kubectl annotate clusters.management.cattle.io local provisioning.cattle.io/administrated=true --overwrite
+}
+
 wait_repo
 detect_repo
 detect_upgrade
@@ -1529,6 +1693,9 @@ pre_upgrade_manifest
 preserve_overcommit_config
 pause_all_charts
 skip_restart_rancher_system_agent
+disable_kubevirt_workload_live_migration
+apply_tls_internal_cn_allowed_services_setting
+annotate_management_cluster_provisioning_administrated
 upgrade_rancher
 patch_local_cluster_details
 update_local_rke_state_secret
@@ -1547,3 +1714,5 @@ upgrade_addons
 upgrade_harvester_csi_rbac
 # wait fleet bundles upto 90 seconds
 wait_for_fleet_bundles 9
+# ingress will be swapped during the pre drain stage but we can apply traefik default config here
+patch_rke2_traefik_config

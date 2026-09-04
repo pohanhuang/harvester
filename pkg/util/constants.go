@@ -1,5 +1,11 @@
 package util
 
+import (
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
 const (
 	prefix                              = "harvesterhci.io"
 	RemovedPVCsAnnotationKey            = prefix + "/removedPersistentVolumeClaims"
@@ -33,12 +39,14 @@ const (
 	LabelHarvesterUpgrade               = prefix + "/upgrade"
 	LabelHarvesterUpgradeState          = prefix + "/upgradeState"
 	LabelHarvesterUpgradeComponent      = prefix + "/upgradeComponent"
+	LabelHarvesterLatestUpgrade         = prefix + "/latestUpgrade"
 	AnnotationStorageClassName          = prefix + "/storageClassName"
 	AnnotationStorageProvisioner        = prefix + "/storageProvisioner"
 	AnnotationIsDefaultStorageClassName = "storageclass.kubernetes.io/is-default-class"
 	AnnotationLastRefreshTime           = prefix + "/lastRefreshTime"
 	AnnotationMacAddressName            = prefix + "/mac-address"
 	AnnotationEnableCPUAndMemoryHotplug = prefix + "/enableCPUAndMemoryHotplug"
+	AnnotationAllowNodeJoin             = prefix + "/allow-node-join"
 
 	AnnotationSkipRancherLoggingAddonWebhookCheck       = prefix + "/skipRancherLoggingAddonWebhookCheck"
 	AnnotationSkipDeschedulerAddonWebhookCheck          = prefix + "/skipDeschedulerAddonWebhookCheck"
@@ -58,6 +66,12 @@ const (
 
 	// AnnotationMigratingPrefix is replaced by AnnotationMigratingNamePrefix, and is kept for compatibility
 	AnnotationMigratingPrefix = AnnotationMigratingNamePrefix
+
+	// AnnotationMigratingCompensation is used to add compensating quota to help already blocked VMIMs, due to insufficient ResourceQuota, to proceed
+	AnnotationMigratingCompensation = prefix + "/migratingCompensation"
+
+	// AnnotationMigratingScalingResyncNeeded is used for ping-pong between vmim_controller and resourcequota_controller
+	AnnotationMigratingScalingResyncNeeded = prefix + "/migratingScalingResyncNeeded"
 
 	// AnnotationInsufficientResourceQuota is indicated the resource is insufficient of Namespace
 	AnnotationInsufficientResourceQuota = prefix + "/insufficient-resource-quota"
@@ -84,6 +98,25 @@ const (
 	NodePause                     = "pause"
 	NodeUnpause                   = "unpause"
 
+	// Annotation for backend storage clone.
+	AnnotationBSCloneStatus       = prefix + "/clone-backend-storage-status"
+	AnnotationBSCloneSourceVM     = prefix + "/clone-backend-storage-source-vm"
+	AnnotationBSCloneRunStrategy  = prefix + "/clone-backend-storage-run-strategy"
+	AnnotationBSCloneActions      = prefix + "/clone-backend-storage-actions"
+	AnnotationBSCloneRetries      = prefix + "/clone-backend-storage-retries"
+	AnnotationBSCloneStartTime    = prefix + "/clone-backend-storage-start-time"
+	AnnotationBSCloneStage        = prefix + "/clone-backend-storage-stage"
+	LabelGeneratedBy              = prefix + "/generated-by"
+	ValueGeneratedByHarvester     = "harvester"
+	BackendStorageJobPrefix       = "backend-storage"
+	CloneInProgress               = "cloning"
+	CloneComplete                 = "cloned"
+	CloneFailed                   = "failed"
+	CloneStagePreCompleted        = "pre-completed"
+	CloneActionRenameEFI          = "rename-efi"
+	CloneActionDeleteEFI          = "delete-efi"
+	CloneActionDeleteTPMRenameEFI = "delete-tpm-and-rename-efi"
+
 	HarvesterManagedNodeLabelKey = prefix + "/managed"
 
 	HarvesterPromoteNodeLabelKey        = prefix + "/promote-node"
@@ -92,34 +125,40 @@ const (
 	ContainerdRegistrySecretName = "harvester-containerd-registry"
 	ContainerdRegistryFileName   = "registries.yaml"
 
-	BackupTargetSecretName              = "harvester-backup-target-secret"
-	InternalTLSSecretName               = "tls-rancher-internal"
-	Rke2IngressNginxAppName             = "rke2-ingress-nginx"
-	Rke2IngressNginxControllerName      = "rke2-ingress-nginx-controller"
-	CattleSystemNamespaceName           = "cattle-system"
-	CattleMonitoringSystemNamespace     = "cattle-monitoring-system"
-	LonghornSystemNamespaceName         = "longhorn-system"
-	LonghornDefaultManagerURL           = "http://longhorn-backend.longhorn-system:9500/v1"
-	KubeSystemNamespace                 = "kube-system"
-	FleetLocalNamespaceName             = "fleet-local"
-	LocalClusterName                    = "local"
-	HarvesterSystemNamespaceName        = "harvester-system"
-	RancherLoggingName                  = "rancher-logging"
-	DeschedulerName                     = "descheduler"
-	PCIDevicesControllerName            = "pcidevices-controller"
-	NvidiaDriverToolkitName             = "nvidia-driver-toolkit"
-	RancherMonitoringPrometheus         = "rancher-monitoring-prometheus"
-	RancherMonitoringAlertmanager       = "rancher-monitoring-alertmanager"
-	RancherMonitoring                   = "rancher-monitoring"
-	RancherMonitoringGrafana            = "rancher-monitoring-grafana"
-	RancherClusterConfigSecretName      = "rancher-cluster-config"
-	CattleLoggingSystemNamespaceName    = "cattle-logging-system"
-	HarvesterUpgradeImageRepository     = "rancher/harvester-upgrade"
-	GrafanaPVCName                      = "rancher-monitoring-grafana"
-	RancherMonitoringName               = "rancher-monitoring"
-	CattleMonitoringSystemNamespaceName = "cattle-monitoring-system"
-	HarvesterVMImportController         = "vm-import-controller-harvester-vm-import-controller"
-	KubeOVNOperatorName                 = "kubeovn-operator"
+	BackupTargetSecretName                = "harvester-backup-target-secret"
+	InternalTLSSecretName                 = "tls-rancher-internal"
+	Rke2IngressNginxAppName               = "rke2-ingress-nginx"
+	Rke2TraefikAppName                    = "rke2-traefik"
+	RancherExposeIngressName              = "rancher-expose"
+	TraefikIngressClassName               = "traefik"
+	DefaultTraefikTLSStoreName            = "default"
+	AnnotationRancherControllerReconciled = prefix + "/rancher-controller-reconciled"
+	NginxIngressClass                     = "nginx"
+	CattleSystemNamespaceName             = "cattle-system"
+	CattleMonitoringSystemNamespace       = "cattle-monitoring-system"
+	LonghornSystemNamespaceName           = "longhorn-system"
+	LonghornDefaultManagerURL             = "http://longhorn-backend.longhorn-system:9500/v1"
+	KubeSystemNamespace                   = "kube-system"
+	FleetLocalNamespaceName               = "fleet-local"
+	LocalClusterName                      = "local"
+	HarvesterSystemNamespaceName          = "harvester-system"
+	RancherLoggingName                    = "rancher-logging"
+	DeschedulerName                       = "descheduler"
+	PCIDevicesControllerName              = "pcidevices-controller"
+	NvidiaDriverToolkitName               = "nvidia-driver-toolkit"
+	HarvesterCSIDriverLVMName             = "harvester-csi-driver-lvm"
+	RancherMonitoringPrometheus           = "rancher-monitoring-prometheus"
+	RancherMonitoringAlertmanager         = "rancher-monitoring-alertmanager"
+	RancherMonitoring                     = "rancher-monitoring"
+	RancherMonitoringGrafana              = "rancher-monitoring-grafana"
+	RancherClusterConfigSecretName        = "rancher-cluster-config"
+	CattleLoggingSystemNamespaceName      = "cattle-logging-system"
+	HarvesterUpgradeImageRepository       = "rancher/harvester-upgrade"
+	GrafanaPVCName                        = "rancher-monitoring-grafana"
+	RancherMonitoringName                 = "rancher-monitoring"
+	CattleMonitoringSystemNamespaceName   = "cattle-monitoring-system"
+	HarvesterVMImportController           = "vm-import-controller-harvester-vm-import-controller"
+	KubeOVNOperatorName                   = "kubeovn-operator"
 	// kubevirt create a CRD object automatically: type kubevirt, name kubevirt, namespace: harvester-system
 	// this object stores all kubevirt related configuration
 	KubeVirtObjectName = "kubevirt"
@@ -138,9 +177,11 @@ const (
 	AddonValuesAnnotation                    = "harvesterhci.io/addon-defaults"
 
 	// CDI constants
-	CSIProvisionerLVM      = "lvm.driver.harvesterhci.io"
-	CSIProvisionerLonghorn = "driver.longhorn.io"
-	LVMTopologyNodeKey     = "topology.lvm.csi/node"
+	CDIAdditionalCAConfigMapName = "harvester-additional-ca-cdi"
+	CDIAdditionalCAConfigMapKey  = "ca.pem"
+	CSIProvisionerLVM            = "lvm.driver.harvesterhci.io"
+	CSIProvisionerLonghorn       = "driver.longhorn.io"
+	LVMTopologyNodeKey           = "topology.lvm.csi/node"
 
 	// CSI constants
 	CSIProvisionerSecretNameKey      = "csi.storage.k8s.io/provisioner-secret-name"
@@ -149,10 +190,13 @@ const (
 	CSINodePublishSecretNamespaceKey = "csi.storage.k8s.io/node-publish-secret-namespace"
 	CSINodeStageSecretNameKey        = "csi.storage.k8s.io/node-stage-secret-name"
 	CSINodeStageSecretNamespaceKey   = "csi.storage.k8s.io/node-stage-secret-namespace"
+	CSINodeExpandSecretNameKey       = "csi.storage.k8s.io/node-expand-secret-name"
+	CSINodeExpandSecretNamespaceKey  = "csi.storage.k8s.io/node-expand-secret-namespace"
 
-	LabelUpgradeReadMessage          = prefix + "/read-message"
-	LabelUpgradeState                = prefix + "/upgradeState"
-	UpgradeStateLoggingInfraPrepared = "LoggingInfraPrepared"
+	LabelUpgradeReadMessage           = prefix + "/read-message"
+	LabelUpgradeState                 = prefix + "/upgradeState"
+	UpgradeStatePreparingLoggingInfra = "PreparingLoggingInfra"
+	UpgradeStateLoggingInfraPrepared  = "LoggingInfraPrepared"
 
 	AnnotationArchiveName                 = prefix + "/archiveName"
 	LabelUpgradeLog                       = prefix + "/upgradeLog"
@@ -187,6 +231,10 @@ const (
 
 	RKEControlPlaneRoleLabel = "rke.cattle.io/control-plane-role"
 
+	MaintainStatusAnnotationKey = prefix + "/maintain-status"
+	MaintainStatusComplete      = "completed"
+	MaintainStatusRunning       = "running"
+
 	LabelMaintainModeStrategy              = prefix + "/maintain-mode-strategy"
 	AnnotationMaintainModeStrategyNodeName = prefix + "/maintain-mode-strategy-node-name"
 
@@ -197,6 +245,10 @@ const (
 	MaintainModeStrategyDefault                        = MaintainModeStrategyMigrate
 	HarvesterReportedConditionKey                      = prefix + "/condition"
 	HarvesterReportedConditionMessageKey               = prefix + "/condition-message"
+	ManagedTapBindingName                              = "managedtap"
+
+	HarvesterInstallCordonedLabel               = prefix + "/install-cordoned"
+	HarvesterInstallCordonedProcessedAnnotation = prefix + "/install-cordoned-processed"
 )
 
 var (
@@ -213,7 +265,10 @@ var (
 		MaintainModeStrategyShutdown,
 	}
 
-	DefaultHarvesterNamespaceWhiteList = []string{"calico-apiserver", "calico-system", "cattle-alerting", "cattle-csp-adapter-system", "cattle-elemental-system", "cattle-epinio-system", "cattle-externalip-system", "cattle-fleet-local-system", "cattle-fleet-system", "cattle-gatekeeper-system", "cattle-global-data", "cattle-global-nt", "cattle-impersonation-system", "cattle-istio", "cattle-istio-system", "cattle-logging", "cattle-logging-system", "cattle-monitoring-system", "cattle-neuvector-system", "cattle-prometheus", "cattle-provisioning-capi-system", "cattle-resources-system", "cattle-sriov-system", "cattle-system", "cattle-ui-plugin-system", "cattle-windows-gmsa-system", "cert-manager", "cis-operator-system", "fleet-default", "ingress-nginx", "istio-system", "kube-node-lease", "kube-public", "kube-system", "longhorn-system", "rancher-alerting-drivers", "security-scan", "tigera-operator", "harvester-system", "harvester-public", "rancher-vcluster", "cattle-dashboards", "fleet-local", "local", "forklift"}
+	DefaultHarvesterNamespaceWhiteList = []string{"calico-apiserver", "calico-system", "cattle-alerting", "cattle-csp-adapter-system", "cattle-elemental-system", "cattle-epinio-system", "cattle-externalip-system", "cattle-fleet-local-system", "cattle-fleet-system", "cattle-gatekeeper-system", "cattle-global-data", "cattle-global-nt", "cattle-impersonation-system", "cattle-istio", "cattle-istio-system", "cattle-logging", "cattle-logging-system", "cattle-monitoring-system", "cattle-neuvector-system", "cattle-prometheus", "cattle-provisioning-capi-system", "cattle-resources-system", "cattle-sriov-system", "cattle-system", "cattle-ui-plugin-system", "cattle-windows-gmsa-system", "cert-manager", "cis-operator-system", "fleet-default", "ingress-nginx", "istio-system", "kube-node-lease", "kube-public", "kube-system", "longhorn-system", "rancher-alerting-drivers", "security-scan", "tigera-operator", "harvester-system", "rancher-vcluster", "cattle-dashboards", "fleet-local", "local", "forklift"}
+
+	StaticIPAnnotationKeyPrefix = fmt.Sprintf("static-ip.%s", prefix)
+	TraefikTLSStoreGVK          = schema.GroupVersionKind{Group: "traefik.io", Version: "v1alpha1", Kind: "TLSStore"}
 )
 
 const (
@@ -251,12 +306,13 @@ const (
 	LastHealthyReplicaKey               = "LastHealthyReplica"
 
 	// moved from storage_network for public usage
-	StorageNetworkAnnotation        = "storage-network.settings.harvesterhci.io"
-	ReplicaStorageNetworkAnnotation = StorageNetworkAnnotation + "/replica"
-	PausedStorageNetworkAnnotation  = StorageNetworkAnnotation + "/paused"
-	HashStorageNetworkAnnotation    = StorageNetworkAnnotation + "/hash"
-	NadStorageNetworkAnnotation     = StorageNetworkAnnotation + "/net-attach-def"
-	OldNadStorageNetworkAnnotation  = StorageNetworkAnnotation + "/old-net-attach-def"
+	StorageNetworkAnnotation         = "storage-network.settings.harvesterhci.io"
+	ReplicaStorageNetworkAnnotation  = StorageNetworkAnnotation + "/replica"
+	PausedStorageNetworkAnnotation   = StorageNetworkAnnotation + "/paused"
+	HashStorageNetworkAnnotation     = StorageNetworkAnnotation + "/hash"
+	NadStorageNetworkAnnotation      = StorageNetworkAnnotation + "/net-attach-def"
+	OldNadStorageNetworkAnnotation   = StorageNetworkAnnotation + "/old-net-attach-def"
+	ExclusiveVlanStorageNetworkLabel = StorageNetworkAnnotation + "/exclusivevlan"
 
 	HashStorageNetworkLabel = HashStorageNetworkAnnotation
 
@@ -309,3 +365,18 @@ const (
 
 	GoArchArm64 = "arm64"
 )
+
+// CSISecretKeyPair groups a CSI secret-name parameter key with its matching namespace key.
+type CSISecretKeyPair struct {
+	NameKey      string
+	NamespaceKey string
+}
+
+// CSIEncryptionSecretKeyPairs lists the CSI parameter key pairs used to reference
+// the encryption secret for a StorageClass, in the order CSI expects them.
+var CSIEncryptionSecretKeyPairs = []CSISecretKeyPair{
+	{CSIProvisionerSecretNameKey, CSIProvisionerSecretNamespaceKey},
+	{CSINodeStageSecretNameKey, CSINodeStageSecretNamespaceKey},
+	{CSINodePublishSecretNameKey, CSINodePublishSecretNamespaceKey},
+	{CSINodeExpandSecretNameKey, CSINodeExpandSecretNamespaceKey},
+}

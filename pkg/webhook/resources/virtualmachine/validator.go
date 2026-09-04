@@ -15,12 +15,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
+	backupcommon "github.com/harvester/harvester/pkg/backup/common"
 	ctlharvestercorev1 "github.com/harvester/harvester/pkg/generated/controllers/core/v1"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
 	ctlcniv1 "github.com/harvester/harvester/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctlkubevirtv1 "github.com/harvester/harvester/pkg/generated/controllers/kubevirt.io/v1"
+	ctllonghornv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta2"
 	"github.com/harvester/harvester/pkg/util"
 	"github.com/harvester/harvester/pkg/util/resourcequota"
 	vmutil "github.com/harvester/harvester/pkg/util/virtualmachine"
@@ -43,32 +46,39 @@ func NewValidator(
 	kubevirtCache ctlkubevirtv1.KubeVirtCache,
 	scCache ctlstoragev1.StorageClassCache,
 	settingCache ctlharvesterv1.SettingCache,
+	backingImageCache ctllonghornv1.BackingImageCache,
+	sar authorizationv1client.SubjectAccessReviewInterface,
 ) types.Validator {
 	return &vmValidator{
-		pvcCache:      pvcCache,
-		vmBackupCache: vmBackupCache,
-		vmCache:       vmCache,
-		vmiCache:      vmiCache,
-		nadCache:      nadCache,
-		kubevirtCache: kubevirtCache,
-		scCache:       scCache,
-		settingCache:  settingCache,
-
-		rqCalculator: resourcequota.NewCalculator(nsCache, podCache, rqCache, vmimCache, settingCache),
+		pvcCache:          pvcCache,
+		vmBackupCache:     vmBackupCache,
+		vmCache:           vmCache,
+		vmiCache:          vmiCache,
+		nadCache:          nadCache,
+		kubevirtCache:     kubevirtCache,
+		scCache:           scCache,
+		settingCache:      settingCache,
+		backingImageCache: backingImageCache,
+		sar:               sar,
+		vmbr:              backupcommon.NewVMBackupReader(),
+		rqCalculator:      resourcequota.NewCalculator(nsCache, podCache, rqCache, vmimCache, settingCache),
 	}
 }
 
 type vmValidator struct {
 	types.DefaultValidator
-	pvcCache      v1.PersistentVolumeClaimCache
-	vmBackupCache ctlharvesterv1.VirtualMachineBackupCache
-	vmCache       ctlkubevirtv1.VirtualMachineCache
-	vmiCache      ctlkubevirtv1.VirtualMachineInstanceCache
-	nadCache      ctlcniv1.NetworkAttachmentDefinitionCache
-	kubevirtCache ctlkubevirtv1.KubeVirtCache
-	scCache       ctlstoragev1.StorageClassCache
-	settingCache  ctlharvesterv1.SettingCache
-	rqCalculator  *resourcequota.Calculator
+	pvcCache          v1.PersistentVolumeClaimCache
+	vmBackupCache     ctlharvesterv1.VirtualMachineBackupCache
+	vmCache           ctlkubevirtv1.VirtualMachineCache
+	vmiCache          ctlkubevirtv1.VirtualMachineInstanceCache
+	nadCache          ctlcniv1.NetworkAttachmentDefinitionCache
+	kubevirtCache     ctlkubevirtv1.KubeVirtCache
+	scCache           ctlstoragev1.StorageClassCache
+	settingCache      ctlharvesterv1.SettingCache
+	backingImageCache ctllonghornv1.BackingImageCache
+	sar               authorizationv1client.SubjectAccessReviewInterface
+	vmbr              backupcommon.VMBackupReader
+	rqCalculator      *resourcequota.Calculator
 }
 
 func (v *vmValidator) Resource() types.Resource {
@@ -101,7 +111,7 @@ func (v *vmValidator) getClusterNetworkForNad(nwName string) (clusterNetwork str
 	if err != nil {
 		return clusterNetwork, err
 	}
-	clusterNetwork, ok := nad.Labels[keyClusterNetwork]
+	clusterNetwork, ok := nad.Labels[util.KeyClusterNetwork]
 	if !ok {
 		return clusterNetwork, err
 	}
@@ -219,13 +229,17 @@ func comparemacs(macList1 map[string]string, macList2 map[string]string) bool {
 	return false
 }
 
-func (v *vmValidator) Create(_ *types.Request, newObj runtime.Object) error {
+func (v *vmValidator) Create(request *types.Request, newObj runtime.Object) error {
 	vm := newObj.(*kubevirtv1.VirtualMachine)
 	if vm == nil {
 		return nil
 	}
 
 	if err := v.checkVMSpec(vm); err != nil {
+		return err
+	}
+
+	if err := v.checkAllVolumeClaimTemplateEntries(request, vm); err != nil {
 		return err
 	}
 
@@ -248,7 +262,7 @@ func (v *vmValidator) Create(_ *types.Request, newObj runtime.Object) error {
 	return nil
 }
 
-func (v *vmValidator) Update(_ *types.Request, oldObj runtime.Object, newObj runtime.Object) error {
+func (v *vmValidator) Update(request *types.Request, oldObj runtime.Object, newObj runtime.Object) error {
 	newVM := newObj.(*kubevirtv1.VirtualMachine)
 	if newVM == nil {
 		return nil
@@ -265,6 +279,10 @@ func (v *vmValidator) Update(_ *types.Request, oldObj runtime.Object, newObj run
 	oldVM := oldObj.(*kubevirtv1.VirtualMachine)
 	if oldVM == nil {
 		return nil
+	}
+
+	if err := v.checkChangedVolumeClaimTemplateEntries(request, oldVM, newVM); err != nil {
+		return err
 	}
 
 	if err := v.checkStorageResourceQuota(newVM, oldVM); err != nil {
@@ -321,6 +339,9 @@ func (v *vmValidator) checkVMSpec(vm *kubevirtv1.VirtualMachine) error {
 	if err := v.checkOccupiedPVCs(vm); err != nil {
 		return err
 	}
+	if err := v.checkShareableVolumes(vm); err != nil {
+		return err
+	}
 	if err := v.checkTerminationGracePeriodSeconds(vm); err != nil {
 		return err
 	}
@@ -342,6 +363,12 @@ func (v *vmValidator) checkVolumeReq(newVM *kubevirtv1.VirtualMachine) error {
 	// this case needs to be treated differently from a standard image scenario as user will boot directly from disk
 	imported := util.IsImportedByVMIC(newVM)
 
+	// status.volumeRequests is only populated by the KubeVirt hotplug
+	// subresource API when the HotplugVolumes feature gate is enabled. With
+	// the default DeclarativeHotplugVolumes-only configuration, virt-api
+	// patches the VM spec directly and this loop never sees any request; it
+	// is kept as a defense for clusters that manually re-enable the
+	// HotplugVolumes gate.
 	for _, volReq := range newVM.Status.VolumeRequests {
 		if volReq.AddVolumeOptions == nil {
 			continue
@@ -372,6 +399,68 @@ func (v *vmValidator) checkVolumeReq(newVM *kubevirtv1.VirtualMachine) error {
 	return nil
 }
 
+// checkShareableVolumes validates every disk with shareable enabled:
+//   - the backing volume must be a PVC that passes CheckShareableVolume
+//     (block-mode RWX from a provisioner other than Longhorn). KubeVirt has no
+//     admission validation on shareable at all, so this webhook is the only gate.
+//   - the disk cache must be unset or none; virt-launcher rejects other cache
+//     modes at VM start, we surface the error at admission instead.
+//   - the disk must not be the boot disk.
+func (v *vmValidator) checkShareableVolumes(vm *kubevirtv1.VirtualMachine) error {
+	if vm.Spec.Template == nil {
+		return nil
+	}
+
+	volumes := vm.Spec.Template.Spec.Volumes
+	volumesByName := make(map[string]*corev1.PersistentVolumeClaimVolumeSource, len(volumes))
+	for i := range volumes {
+		if volumes[i].PersistentVolumeClaim != nil {
+			volumesByName[volumes[i].Name] = &volumes[i].PersistentVolumeClaim.PersistentVolumeClaimVolumeSource
+		}
+	}
+
+	disks := vm.Spec.Template.Spec.Domain.Devices.Disks
+	anyBootOrder := false
+	for i := range disks {
+		if disks[i].BootOrder != nil {
+			anyBootOrder = true
+			break
+		}
+	}
+
+	for i := range disks {
+		disk := &disks[i]
+		if disk.Shareable == nil || !*disk.Shareable {
+			continue
+		}
+
+		// without any explicit bootOrder the first disk boots
+		if (disk.BootOrder != nil && *disk.BootOrder == 1) || (!anyBootOrder && i == 0) {
+			return werror.NewInvalidError(
+				fmt.Sprintf("disk %s cannot be shareable: a shareable disk cannot be used as the boot disk", disk.Name),
+				"spec.template.spec.domain.devices.disks")
+		}
+
+		if disk.Cache != "" && disk.Cache != kubevirtv1.CacheNone {
+			return werror.NewInvalidError(
+				fmt.Sprintf("disk %s cannot be shareable: a shareable disk requires cache mode none, got %s", disk.Name, disk.Cache),
+				"spec.template.spec.domain.devices.disks")
+		}
+
+		pvcSource, ok := volumesByName[disk.Name]
+		if !ok {
+			return werror.NewInvalidError(
+				fmt.Sprintf("disk %s cannot be shareable: a shareable disk must be backed by a persistent volume claim", disk.Name),
+				"spec.template.spec.volumes")
+		}
+
+		if err := vmutil.CheckShareableVolume(v.pvcCache, v.scCache, vm.Namespace, pvcSource.ClaimName); err != nil {
+			return werror.NewInvalidError(err.Error(), "spec.template.spec.volumes")
+		}
+	}
+	return nil
+}
+
 func (v *vmValidator) checkVMStoppingStatus(oldVM *kubevirtv1.VirtualMachine, newVM *kubevirtv1.VirtualMachine) bool {
 	oldRunStrategy, _ := oldVM.RunStrategy()
 	newRunStrategy, _ := newVM.RunStrategy()
@@ -392,6 +481,7 @@ func (v *vmValidator) checkVMStoppingStatus(oldVM *kubevirtv1.VirtualMachine, ne
 	return false
 }
 
+// checkVolumeClaimTemplatesAnnotation validates the structure of the annotation (name required per entry).
 func (v *vmValidator) checkVolumeClaimTemplatesAnnotation(vm *kubevirtv1.VirtualMachine) error {
 	volumeClaimTemplatesStr, ok := vm.Annotations[util.AnnotationVolumeClaimTemplates]
 	if !ok || volumeClaimTemplatesStr == "" {
@@ -409,26 +499,178 @@ func (v *vmValidator) checkVolumeClaimTemplatesAnnotation(vm *kubevirtv1.Virtual
 	return nil
 }
 
+// checkVolumeClaimTemplateEntry validates a single entry:
+// 1. Resolves the VMImage ID via the SC → BackingImage → imageId annotation chain.
+// 2. If unresolvable (no Longhorn SC, no backing image, etc.) — skips all validation.
+// 3. Compares the resolved VMImage ID against the entry's imageId annotation; rejects on mismatch.
+// 4. Verifies the requester has get access to the referenced VMImage.
+func (v *vmValidator) checkVolumeClaimTemplateEntry(request *types.Request, entry util.VolumeClaimTemplateEntry) error {
+	if entry.Spec.StorageClassName == nil {
+		return nil
+	}
+
+	vmImageID, err := v.getVMImageIDFromSC(*entry.Spec.StorageClassName)
+	if err != nil {
+		return err
+	}
+	// SC → BackingImage chain incomplete — skip the entire validation
+	if vmImageID == "" {
+		return nil
+	}
+
+	targetVMImageID := vmImageID
+
+	if entryImageID := entry.Annotations[util.AnnotationImageID]; entryImageID != "" && vmImageID != entryImageID {
+		return werror.NewInvalidError(
+			fmt.Sprintf("imageId %q in volume template does not match backing image of storage class %q (expected %q)",
+				entryImageID, *entry.Spec.StorageClassName, vmImageID),
+			fmt.Sprintf("metadata.annotations[%s]", util.AnnotationVolumeClaimTemplates),
+		)
+	}
+
+	parts := strings.SplitN(targetVMImageID, "/", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	imageNS, imageName := parts[0], parts[1]
+
+	allowed, err := util.CheckObjectAccess(request.Context, util.ResourceAccessCheck{
+		SAR:       v.sar,
+		Username:  request.UserInfo.Username,
+		Groups:    request.UserInfo.Groups,
+		Verb:      util.VerbGet,
+		GVR:       util.VirtualMachineImageGVR,
+		Namespace: imageNS,
+		Name:      imageName,
+	})
+	if err != nil {
+		return werror.NewInternalError(fmt.Sprintf("failed to check access to image %s/%s: %v", imageNS, imageName, err))
+	}
+	if !allowed {
+		logrus.Infof("user %q is not allowed to access image %s/%s", request.UserInfo.Username, imageNS, imageName)
+		return werror.NewInvalidError(
+			fmt.Sprintf("user %q is not allowed to access image %s/%s", request.UserInfo.Username, imageNS, imageName),
+			fmt.Sprintf("metadata.annotations[%s]", util.AnnotationVolumeClaimTemplates),
+		)
+	}
+	return nil
+}
+
+// checkAllVolumeClaimTemplateEntries runs checkVolumeClaimTemplateEntry for every entry in the annotation.
+// Used on CREATE where all entries are new and must be fully validated.
+func (v *vmValidator) checkAllVolumeClaimTemplateEntries(request *types.Request, vm *kubevirtv1.VirtualMachine) error {
+	volumeClaimTemplatesStr, ok := vm.Annotations[util.AnnotationVolumeClaimTemplates]
+	if !ok || volumeClaimTemplatesStr == "" {
+		return nil
+	}
+	entries, err := util.UnmarshalVolumeClaimTemplates(volumeClaimTemplatesStr)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := v.checkVolumeClaimTemplateEntry(request, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkChangedVolumeClaimTemplateEntries runs checkVolumeClaimTemplateEntry only for entries whose
+// imageID or StorageClassName changed between oldVM and newVM.
+// Used on UPDATE to avoid re-checking unchanged image references.
+//
+// Edge cases for AnnotationVolumeClaimTemplates transitions:
+//   - Empty → non-empty: oldEntryMap remains empty, so every new entry is validated.
+//   - Non-empty → empty: the function returns early (newAnn == "") so no entries are validated.
+func (v *vmValidator) checkChangedVolumeClaimTemplateEntries(request *types.Request, oldVM, newVM *kubevirtv1.VirtualMachine) error {
+	oldAnn := oldVM.Annotations[util.AnnotationVolumeClaimTemplates]
+	newAnn := newVM.Annotations[util.AnnotationVolumeClaimTemplates]
+	if newAnn == "" || oldAnn == newAnn {
+		return nil
+	}
+
+	newEntries, err := util.UnmarshalVolumeClaimTemplates(newAnn)
+	if err != nil {
+		return err
+	}
+
+	oldEntryMap := make(map[string]util.VolumeClaimTemplateEntry)
+	if oldAnn != "" {
+		oldEntries, err := util.UnmarshalVolumeClaimTemplates(oldAnn)
+		if err != nil {
+			return err
+		}
+		for _, e := range oldEntries {
+			oldEntryMap[e.Name] = e
+		}
+	}
+
+	for _, newEntry := range newEntries {
+		old, exists := oldEntryMap[newEntry.Name]
+		if exists &&
+			old.Annotations[util.AnnotationImageID] == newEntry.Annotations[util.AnnotationImageID] &&
+			reflect.DeepEqual(old.Spec.StorageClassName, newEntry.Spec.StorageClassName) {
+			continue
+		}
+		if err := v.checkVolumeClaimTemplateEntry(request, newEntry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getVMImageIDFromSC resolves the VMImage ID for scName via SC → BackingImage → imageId annotation.
+// Returns "" if any step is missing (SC not found, non-Longhorn provisioner, no backingImage param, BI not found, or no imageId annotation).
+func (v *vmValidator) getVMImageIDFromSC(scName string) (string, error) {
+	sc, err := v.scCache.Get(scName)
+	if err != nil {
+		return "", werror.NewInternalError(fmt.Sprintf("failed to get storage class %s: %v", scName, err))
+	}
+	if sc.Provisioner != util.CSIProvisionerLonghorn {
+		return "", nil
+	}
+
+	biName := sc.Parameters[util.LonghornOptionBackingImageName]
+	if biName == "" {
+		return "", nil
+	}
+
+	bi, err := v.backingImageCache.Get(util.LonghornSystemNamespaceName, biName)
+	if err != nil {
+		return "", werror.NewInternalError(fmt.Sprintf("failed to get backing image %s: %v", biName, err))
+	}
+
+	return bi.Annotations[util.AnnotationImageID], nil
+}
+
 func (v *vmValidator) checkVolumeAnnotations(oldVM, newVM *kubevirtv1.VirtualMachine) ([]util.VolumeClaimTemplateEntry, error) {
 	oldAnn := oldVM.Annotations[util.AnnotationVolumeClaimTemplates]
 	newAnn := newVM.Annotations[util.AnnotationVolumeClaimTemplates]
-	if oldAnn == "" || newAnn == "" || oldAnn == newAnn {
+
+	if newAnn == "" || oldAnn == newAnn {
 		return nil, nil
 	}
 
 	fieldPath := fmt.Sprintf("metadata.annotations.%s", util.AnnotationVolumeClaimTemplates)
 
-	oldEntries, err := util.UnmarshalVolumeClaimTemplates(oldAnn)
-	if err != nil {
-		return nil, werror.NewInvalidError(
-			fmt.Sprintf("failed to unmarshal %s", oldAnn),
-			fieldPath,
-		)
-	}
 	newEntries, err := util.UnmarshalVolumeClaimTemplates(newAnn)
 	if err != nil {
 		return nil, werror.NewInvalidError(
-			fmt.Sprintf("failed to unmarshal %s", newAnn),
+			fmt.Sprintf("failed to unmarshal %s: %v", newAnn, err.Error()),
+			fieldPath,
+		)
+	}
+
+	// this means the annotation is being added for the first time and
+	// we need to validate the new entries exist and are correct
+	if oldAnn == "" {
+		return newEntries, v.checkStorageClassesExist(newEntries)
+	}
+
+	oldEntries, err := util.UnmarshalVolumeClaimTemplates(oldAnn)
+	if err != nil {
+		return nil, werror.NewInvalidError(
+			fmt.Sprintf("failed to unmarshal %s: %v", oldAnn, err.Error()),
 			fieldPath,
 		)
 	}
@@ -449,6 +691,27 @@ func (v *vmValidator) checkVolumeAnnotations(oldVM, newVM *kubevirtv1.VirtualMac
 	}
 
 	return newEntries, v.checkPVCsStorageRequestsAndClass(oldPvcMap, newPvcMap)
+}
+
+func (v *vmValidator) checkStorageClassesExist(entries []util.VolumeClaimTemplateEntry) error {
+	for _, entry := range entries {
+		scName := entry.Spec.StorageClassName
+		if scName == nil || *scName == "" {
+			continue
+		}
+		_, err := v.scCache.Get(*scName)
+		if err == nil {
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			return werror.NewInvalidError(
+				fmt.Sprintf("storage class %s does not exist", *scName),
+				fmt.Sprintf("metadata.annotations.%s", util.AnnotationVolumeClaimTemplates),
+			)
+		}
+		return werror.NewInternalError(fmt.Sprintf("failed to get storage class %s: %v", *scName, err))
+	}
+	return nil
 }
 
 // checkPVCsStorageRequestsAndClass checks for storage request changes and storage class changes.
@@ -557,11 +820,15 @@ func (v *vmValidator) checkOccupiedPVCs(vm *kubevirtv1.VirtualMachine) error {
 }
 
 func (v *vmValidator) checkVMBackup(vm *kubevirtv1.VirtualMachine) error {
-	if exist, err := webhookutil.HasInProgressingVMBackupBySourceUID(v.vmBackupCache, string(vm.UID)); err != nil {
+	exist, err := webhookutil.HasActiveBackup(v.vmBackupCache, v.vmbr, string(vm.UID))
+	if err != nil {
 		return werror.NewInternalError(err.Error())
-	} else if exist {
-		return werror.NewBadRequest(fmt.Sprintf("there is vmbackup in progress for vm %s/%s, please wait for the vmbackup or remove it before stop/restart the vm", vm.Namespace, vm.Name))
 	}
+
+	if exist {
+		return werror.NewBadRequest(fmt.Sprintf("vm %s/%s has a backup in progress; wait for it to finish or delete it before stopping/restarting", vm.Namespace, vm.Name))
+	}
+
 	return nil
 }
 
@@ -652,7 +919,7 @@ func (v *vmValidator) checkMaintenanceModeStrategyIsValid(newVM, oldVM *kubevirt
 	if oldVM != nil {
 		oldLabels := oldVM.ObjectMeta.Labels
 		oldStrategy, oldOk := oldLabels[util.LabelMaintainModeStrategy]
-		if oldOk && newOk && oldStrategy == newStrategy && !slices.Contains(util.MaintenanceModeStrategyValidValues, oldStrategy) {
+		if oldOk && newOk && oldStrategy == newStrategy && !slices.Contains(util.MaintenanceModeStrategyValidValues, oldStrategy) { //nolint:govet // inline analyzer: slices.Contains cannot be inlined yet (generic type inference), not actionable
 			// Maintenance mode strategy was invalid and was not updted. Emit log
 			// message, but return ok
 			logrus.WithFields(logrus.Fields{
@@ -667,7 +934,7 @@ func (v *vmValidator) checkMaintenanceModeStrategyIsValid(newVM, oldVM *kubevirt
 	}
 
 	// New maintenance mode strategy is invalid, not ok
-	if newOk && !slices.Contains(util.MaintenanceModeStrategyValidValues, newStrategy) {
+	if newOk && !slices.Contains(util.MaintenanceModeStrategyValidValues, newStrategy) { //nolint:govet // inline analyzer: slices.Contains cannot be inlined yet (generic type inference), not actionable
 		return werror.NewInvalidError(
 			fmt.Sprintf("invalid maintenance mode strategy: %v", newStrategy),
 			fmt.Sprintf("metadata.labels[%v]", util.LabelMaintainModeStrategy),
