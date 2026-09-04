@@ -348,8 +348,13 @@ func (h *Handler) createNad(setting *harvesterv1.Setting) (*nadv1.NetworkAttachm
 	nad.Annotations = map[string]string{
 		keys.nadAnno: "true",
 	}
+
 	nad.Labels = map[string]string{
 		keys.nadHashLabel: h.sha1(hashInput),
+	}
+
+	if config.ExclusiveVlan {
+		nad.Labels[util.ExclusiveVlanStorageNetworkLabel] = "true"
 	}
 	nad.Spec.Config = string(nadConfig)
 
@@ -360,6 +365,18 @@ func (h *Handler) createNad(setting *harvesterv1.Setting) (*nadv1.NetworkAttachm
 	}
 
 	return nadResult, nil
+}
+
+func (h *Handler) updateExclusiveVlanLabel(nad *nadv1.NetworkAttachmentDefinition, exclusiveVlan bool) (*nadv1.NetworkAttachmentDefinition, error) {
+	if exclusiveVlan {
+		if nad.Labels == nil {
+			nad.Labels = make(map[string]string)
+		}
+		nad.Labels[util.ExclusiveVlanStorageNetworkLabel] = "true"
+	} else {
+		delete(nad.Labels, util.ExclusiveVlanStorageNetworkLabel)
+	}
+	return h.networkAttachmentDefinitions.Update(nad)
 }
 
 func (h *Handler) findOrCreateNad(setting *harvesterv1.Setting) (*nadv1.NetworkAttachmentDefinition, error) {
@@ -389,7 +406,18 @@ func (h *Handler) findOrCreateNad(setting *harvesterv1.Setting) (*nadv1.NetworkA
 		}).Info("Found more than one match nad")
 	}
 
-	return &nads.Items[0], nil
+	config, err := h.getNetworkConfig(setting)
+	if err != nil {
+		return nil, err
+	}
+
+	nadCopy := nads.Items[0].DeepCopy()
+	nad, err := h.updateExclusiveVlanLabel(nadCopy, config.ExclusiveVlan)
+	if err != nil {
+		return nil, err
+	}
+
+	return nad, nil
 }
 
 func (h *Handler) checkValueIsChanged(setting *harvesterv1.Setting) (*harvesterv1.Setting, error) {
@@ -476,7 +504,7 @@ func (h *Handler) validateIPAddressesAllocations(setting *harvesterv1.Setting) e
 	//Formula - https://docs.harvesterhci.io/v1.4/advanced/storagenetwork/
 	//Dynamic parameters like number of images download/upload, backing-image-manager and backing-image-ds are skipped
 	//and only the number of nodes each running an instance-manager pod is used
-	MinAllocatableIPAddrs := util.CountNonWitnessNodes(nodes)
+	MinAllocatableIPAddrs := util.CountNonWitnessHealthyNodes(nodes)
 
 	var config network.Config
 
@@ -659,34 +687,6 @@ func (h *Handler) checkGrafanaStatusAndStart() error {
 	return nil
 }
 
-func (h *Handler) checkRancherMonitoringStatusAndStart() error {
-	// check managedchart fleet-local/rancher-monitoring paused
-	monitoring, err := h.managedChartCache.Get(util.FleetLocalNamespaceName, util.RancherMonitoring)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logrus.Infof("rancher monitoring not found. skip")
-			return nil
-		}
-		return fmt.Errorf("rancher monitoring get error %v", err)
-	}
-
-	// check pause or not
-	if _, ok := monitoring.Annotations[util.PausedStorageNetworkAnnotation]; ok {
-		logrus.Infof("current Rancher Monitoring paused: %v", monitoring.Spec.Paused)
-		logrus.Infof("start rancher monitoring")
-		monitoringCopy := monitoring.DeepCopy()
-		monitoringCopy.Spec.Paused = false
-		delete(monitoringCopy.Annotations, util.PausedStorageNetworkAnnotation)
-
-		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-			return fmt.Errorf("rancher monitoring error %v", err)
-		}
-		return nil
-	}
-
-	return nil
-}
-
 func (h *Handler) checkVMImportControllerStatusAndStart() error {
 	// check deployment harvester-system/harvester-harvester-vm-import-controller replica
 	vmImportControllerDeploy, err := h.deploymentCache.Get(util.HarvesterSystemNamespaceName, util.HarvesterVMImportController)
@@ -733,39 +733,7 @@ func (h *Handler) checkPodStatusAndStart() error {
 		return err
 	}
 
-	if err := h.checkRancherMonitoringStatusAndStart(); err != nil {
-		return err
-	}
-
 	return h.checkVMImportControllerStatusAndStart()
-}
-
-func (h *Handler) checkRancherMonitoringStatusAndStop() error {
-	// check managedchart fleet-local/rancher-monitoring paused
-	monitoring, err := h.managedChartCache.Get(util.FleetLocalNamespaceName, util.RancherMonitoring)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logrus.Infof("rancher monitoring not found. skip")
-			return nil
-		}
-		return fmt.Errorf("rancher monitoring get error %v", err)
-	}
-
-	// check pause or not
-	if !monitoring.Spec.Paused {
-		logrus.Infof("current Rancher Monitoring paused: %v", monitoring.Spec.Paused)
-		logrus.Infof("stop rancher monitoring")
-		monitoringCopy := monitoring.DeepCopy()
-		monitoringCopy.Annotations[util.PausedStorageNetworkAnnotation] = "false"
-		monitoringCopy.Spec.Paused = true
-
-		if _, err := h.managedCharts.Update(monitoringCopy); err != nil {
-			return fmt.Errorf("rancher monitoring error %v", err)
-		}
-		return nil
-	}
-
-	return err
 }
 
 func (h *Handler) checkPrometheusStatusAndStop() error {
@@ -881,10 +849,6 @@ func (h *Handler) checkVMImportControllerStatusAndStop() error {
 
 // check Pod status, if all pods are stopped, return true
 func (h *Handler) checkPodStatusAndStop() error {
-	if err := h.checkRancherMonitoringStatusAndStop(); err != nil {
-		return err
-	}
-
 	if err := h.checkPrometheusStatusAndStop(); err != nil {
 		return err
 	}
@@ -1108,6 +1072,7 @@ func (h *Handler) initRWXNetwork(setting *harvesterv1.Setting) (*harvesterv1.Set
 	}
 	setting.Annotations[util.RWXNetworkInitializedAnno] = "true"
 	if !isShare {
+		logrus.Info("Longhorn RWX endpoint and storage network are not shared, initializing rwx-network with share-storage-network=false")
 		return h.settings.Update(setting)
 	}
 
@@ -1117,6 +1082,7 @@ func (h *Handler) initRWXNetwork(setting *harvesterv1.Setting) (*harvesterv1.Set
 		return setting, fmt.Errorf("failed to marshal rwx-network config: %v", err)
 	}
 	setting.Value = string(shareConfigJSON)
+	logrus.Info("Longhorn RWX endpoint and storage network are shared, initializing rwx-network with share-storage-network=true")
 	newSetting, err := h.settings.Update(setting)
 	if err != nil {
 		logrus.Errorf("failed to update rwx-network setting during init: %v", err)
@@ -1128,15 +1094,20 @@ func (h *Handler) initRWXNetwork(setting *harvesterv1.Setting) (*harvesterv1.Set
 func (h *Handler) isLHRWXShareStorageNetwork() (bool, error) {
 	// don't use cache here since we want to reflect the latest LH setting values
 	lhStorageNetwork, err := h.longhornSettings.Get(util.LonghornSystemNamespaceName, longhornStorageNetworkName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	// do NOT swallow NotFound here. During upgrade, Harvester's initRWXNetwork may run before Longhorn's
+	// one-time migration creates the endpoint-network-for-rwx-volume CR. Silently returning false would
+	// mark rwx-network as initialized=true with share-storage-network=false, causing harvester to
+	// overwrite endpoint-network-for-rwx-volume with an empty value and poison existing RWX mounts.
+	// Returning an error forces a requeue until both settings exist. See https://github.com/harvester/harvester/issues/10532
+	if err != nil || lhStorageNetwork == nil {
 		return false, fmt.Errorf("failed to get longhorn %s setting: %v", longhornStorageNetworkName, err)
 	}
 	lhRWXEndpoint, err := h.longhornSettings.Get(util.LonghornSystemNamespaceName, longhornEndpointNetworkForRWXVolume, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil || lhRWXEndpoint == nil {
 		return false, fmt.Errorf("failed to get longhorn %s setting: %v", longhornEndpointNetworkForRWXVolume, err)
 	}
-	return lhStorageNetwork != nil && lhRWXEndpoint != nil &&
-		lhStorageNetwork.Value != "" && lhStorageNetwork.Value == lhRWXEndpoint.Value, nil
+	logrus.Debugf("Longhorn storage network: %v, RWX endpoint network: %v", lhStorageNetwork.Value, lhRWXEndpoint.Value)
+	return lhStorageNetwork.Value != "" && lhStorageNetwork.Value == lhRWXEndpoint.Value, nil
 }
 
 // getStorageNetworkNAD returns the NAD name currently in use by the storage-network setting.

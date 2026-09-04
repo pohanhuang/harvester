@@ -3,6 +3,8 @@ package virtualmachine
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,16 +25,12 @@ import (
 	"github.com/harvester/harvester/pkg/util"
 	"github.com/harvester/harvester/pkg/util/network"
 	"github.com/harvester/harvester/pkg/util/virtualmachine"
+	werror "github.com/harvester/harvester/pkg/webhook/error"
 	"github.com/harvester/harvester/pkg/webhook/types"
 	k8slabels "k8s.io/apimachinery/pkg/labels"
 )
 
 const (
-	networkGroup      = "network.harvesterhci.io"
-	keyClusterNetwork = networkGroup + "/clusternetwork"
-	overlayNetwork    = "OverlayNetwork"
-	keyNetworkType    = networkGroup + "/type"
-
 	memory10M    = 10485760
 	memory100M   = 104857600
 	memory256M   = 268435456
@@ -77,7 +75,7 @@ func (m *vmMutator) Resource() types.Resource {
 	}
 }
 
-func (m *vmMutator) Create(_ *types.Request, newObj runtime.Object) (types.PatchOps, error) {
+func (m *vmMutator) Create(request *types.Request, newObj runtime.Object) (types.PatchOps, error) {
 	vm := newObj.(*kubevirtv1.VirtualMachine)
 
 	logrus.Debugf("create VM %s/%s", vm.Namespace, vm.Name)
@@ -88,6 +86,10 @@ func (m *vmMutator) Create(_ *types.Request, newObj runtime.Object) (types.Patch
 	}
 
 	patchOps = patchDefaultCPU(vm, patchOps)
+
+	if err := checkCpuManagerAffinityTermChanged(request, nil, vm); err != nil {
+		return nil, err
+	}
 
 	patchOps, err = m.patchAffinity(vm, patchOps)
 	if err != nil {
@@ -113,7 +115,7 @@ func (m *vmMutator) Create(_ *types.Request, newObj runtime.Object) (types.Patch
 	return patchOps, err
 }
 
-func (m *vmMutator) Update(_ *types.Request, oldObj runtime.Object, newObj runtime.Object) (types.PatchOps, error) {
+func (m *vmMutator) Update(request *types.Request, oldObj runtime.Object, newObj runtime.Object) (types.PatchOps, error) {
 	newVM := newObj.(*kubevirtv1.VirtualMachine)
 	oldVM := oldObj.(*kubevirtv1.VirtualMachine)
 
@@ -142,6 +144,10 @@ func (m *vmMutator) Update(_ *types.Request, oldObj runtime.Object, newObj runti
 
 	if needUpdateRunStrategy {
 		patchOps = patchRunStrategy(newVM, patchOps)
+	}
+
+	if err := checkCpuManagerAffinityTermChanged(request, oldVM, newVM); err != nil {
+		return nil, err
 	}
 
 	patchOps, err = m.patchAffinity(newVM, patchOps)
@@ -383,7 +389,11 @@ func generateMemoryPatch(
 	// patch maxSockets, only when CPU and Memory hotplug is disabled and architecture is not ARM
 	// note that maxSockets is not supported on ARM architecture
 	if !enableCPUAndMemoryHotplug && !isARM {
-		patchOps = append(patchOps, `{"op": "replace", "path": "/spec/template/spec/domain/cpu/maxSockets", "value": 1}`)
+		var sockets uint32 = 1
+		if vm.Spec.Template.Spec.Domain.CPU != nil && vm.Spec.Template.Spec.Domain.CPU.Sockets != 0 {
+			sockets = vm.Spec.Template.Spec.Domain.CPU.Sockets
+		}
+		patchOps = append(patchOps, fmt.Sprintf(`{"op": "replace", "path": "/spec/template/spec/domain/cpu/maxSockets", "value": %d}`, sockets))
 	}
 
 	return patchOps, nil
@@ -495,13 +505,13 @@ func (m *vmMutator) getNodeSelectorRequirementFromNetwork(defaultNamespace strin
 	if err != nil {
 		return nil, err
 	}
-	clusterNetwork, ok := nad.Labels[keyClusterNetwork]
+	clusterNetwork, ok := nad.Labels[util.KeyClusterNetwork]
 	if !ok {
 		return nil, nil
 	}
 
 	return &v1.NodeSelectorRequirement{
-		Key:      fmt.Sprintf("%s/%s", networkGroup, clusterNetwork),
+		Key:      fmt.Sprintf("%s/%s", util.NetworkGroup, clusterNetwork),
 		Operator: v1.NodeSelectorOpIn,
 		Values:   []string{"true"},
 	}, nil
@@ -534,7 +544,7 @@ func makeAffinityFromVMTemplate(template *kubevirtv1.VirtualMachineInstanceTempl
 	for _, term := range affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
 		expressions := make([]v1.NodeSelectorRequirement, 0, len(term.MatchExpressions))
 		for _, expression := range term.MatchExpressions {
-			if !strings.HasPrefix(expression.Key, networkGroup) && (expression.Key != kubevirtv1.CPUManager) {
+			if !strings.HasPrefix(expression.Key, util.NetworkGroup) && (expression.Key != kubevirtv1.CPUManager) {
 				expressions = append(expressions, expression)
 			}
 		}
@@ -761,7 +771,7 @@ func (m *vmMutator) getNadAndDHCPOption(networkName string, vm *kubevirtv1.Virtu
 		return false, err
 	}
 
-	if !strings.EqualFold(nad.Labels[keyNetworkType], overlayNetwork) {
+	if !util.IsNetworkTypeOverlay(nad) {
 		return false, nil
 	}
 
@@ -896,4 +906,45 @@ func isCreatedByForklift(vm *kubevirtv1.VirtualMachine) bool {
 	_, planExists := vm.Labels[planKey]
 	_, vmIDExists := vm.Labels[vmIDKey]
 	return migrationExists && planExists && vmIDExists
+}
+
+func checkCpuManagerAffinityTermChanged(request *types.Request, oldVM, newVM *kubevirtv1.VirtualMachine) error {
+	if request != nil && request.IsFromController() {
+		return nil
+	}
+	getCPUManagerExprs := func(vm *kubevirtv1.VirtualMachine) []v1.NodeSelectorRequirement {
+		if vm == nil || vm.Spec.Template == nil {
+			return nil
+		}
+		affinity := vm.Spec.Template.Spec.Affinity
+		if affinity == nil || affinity.NodeAffinity == nil ||
+			affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+			return nil
+		}
+		var exprs []v1.NodeSelectorRequirement
+		for _, term := range affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+			for _, expr := range term.MatchExpressions {
+				if expr.Key == kubevirtv1.CPUManager {
+					exprs = append(exprs, expr)
+				}
+			}
+		}
+		if len(exprs) > 1 {
+			slices.SortFunc(exprs, func(a, b v1.NodeSelectorRequirement) int {
+				if cmp := strings.Compare(string(a.Operator), string(b.Operator)); cmp != 0 {
+					return cmp
+				}
+				return strings.Compare(fmt.Sprintf("%v", a.Values), fmt.Sprintf("%v", b.Values))
+			})
+		}
+		return exprs
+	}
+
+	if reflect.DeepEqual(getCPUManagerExprs(oldVM), getCPUManagerExprs(newVM)) {
+		return nil
+	}
+	return werror.NewInvalidError(
+		fmt.Sprintf("key %q is automatically operated by Harvester controller and can't be changed manually", kubevirtv1.CPUManager),
+		"spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution",
+	)
 }

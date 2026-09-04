@@ -103,14 +103,14 @@ https://github.com/harvester/harvester/releases
 
 | Release   | Version | Type           | Release Note (Changelog)                                         | Upgrade Note                                                |
 |-----------|---------|----------------|------------------------------------------------------------------|-------------------------------------------------------------|
-| **1.8***  | 1.8.0   | Latest         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.8.0) | [🔗](https://docs.harvesterhci.io/v1.8/upgrade/v1-7-x-to-v1-8-x) |
+| **1.8***  | 1.8.1   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.8.1) | [🔗](https://docs.harvesterhci.io/v1.8/upgrade/v1-7-x-to-v1-8-x) |
 | **1.7***  | 1.7.1   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.7.1) | [🔗](https://docs.harvesterhci.io/v1.7/upgrade/v1-6-x-to-v1-7-x) |
-| **1.6***  | 1.6.1   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.6.1) | [🔗](https://docs.harvesterhci.io/v1.6/upgrade/v1-5-x-to-v1-6-x) |
-| **1.5***  | 1.5.2   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.5.2) | [🔗](https://docs.harvesterhci.io/v1.5/upgrade/v1-4-2-to-v1-5-2) |
-| **1.4***  | 1.4.3   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.4.3) | [🔗](https://docs.harvesterhci.io/v1.4/upgrade/v1-4-1-to-v1-4-3) |
-| **1.3***  | 1.3.2   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.3.2) | [🔗](https://docs.harvesterhci.io/v1.3/upgrade/v1-3-1-to-v1-3-2) |
-| **1.2***  | 1.2.2   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.2.2) | [🔗](https://docs.harvesterhci.io/v1.2/upgrade/v1-2-1-to-v1-2-2) |
-| **1.1***  | 1.1.3   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.1.3) | [🔗](https://docs.harvesterhci.io/v1.2/upgrade/v1-1-to-v1-1-2)   |
+| **1.6**   | 1.6.1   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.6.1) | [🔗](https://docs.harvesterhci.io/v1.6/upgrade/v1-5-x-to-v1-6-x) |
+| **1.5**   | 1.5.2   | Stable         | [🔗](https://github.com/harvester/harvester/releases/tag/v1.5.2) | [🔗](https://docs.harvesterhci.io/v1.5/upgrade/v1-4-2-to-v1-5-2) |
+| **1.4**   | 1.4.3   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.4.3) | [🔗](https://docs.harvesterhci.io/v1.4/upgrade/v1-4-1-to-v1-4-3) |
+| **1.3**   | 1.3.2   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.3.2) | [🔗](https://docs.harvesterhci.io/v1.3/upgrade/v1-3-1-to-v1-3-2) |
+| **1.2**   | 1.2.2   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.2.2) | [🔗](https://docs.harvesterhci.io/v1.2/upgrade/v1-2-1-to-v1-2-2) |
+| **1.1**   | 1.1.3   | EOL            | [🔗](https://github.com/harvester/harvester/releases/tag/v1.1.3) | [🔗](https://docs.harvesterhci.io/v1.2/upgrade/v1-1-to-v1-1-2)   |
 
 ## Documentation
 
@@ -140,9 +140,6 @@ Harvester is 100% open-source software. The project source code is spread across
 If you need any help with Harvester, please join us at either our [Slack](https://slack.rancher.io/) #harvester channel or [forums](https://forums.rancher.com/) where most of our team hangs out at.
 
 If you have any feedback or questions, feel free to [file an issue](https://github.com/harvester/harvester/issues/new/choose).
-
-You can also [ask Harvester Guru](https://gurubase.io/g/harvester) your questions.
-
 
 ## License
 Copyright (c) 2026 [SUSE, LLC.](https://www.suse.com/)

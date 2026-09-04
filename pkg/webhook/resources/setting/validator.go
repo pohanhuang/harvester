@@ -47,10 +47,12 @@ import (
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	"github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
+	"github.com/harvester/harvester/pkg/backup/common"
 	"github.com/harvester/harvester/pkg/containerd"
 	settingctl "github.com/harvester/harvester/pkg/controller/master/setting"
 	"github.com/harvester/harvester/pkg/controller/master/storagenetwork"
 	ctlv1beta1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
+	ctlcniv1 "github.com/harvester/harvester/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctlkubevirtv1 "github.com/harvester/harvester/pkg/generated/controllers/kubevirt.io/v1"
 	ctllhv1b2 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta2"
 	ctlnetworkv1 "github.com/harvester/harvester/pkg/generated/controllers/network.harvesterhci.io/v1beta1"
@@ -112,6 +114,7 @@ var validateSettingFuncs = map[string]validateSettingFunc{
 	settings.AdditionalGuestMemoryOverheadRatioName:            validateAdditionalGuestMemoryOverheadRatio,
 	settings.MaxHotplugRatioSettingName:                        validateMaxHotplugRatio,
 	settings.LHIMResourcesSettingName:                          validateLHIMResources,
+	settings.LonghornV2DataEngineMemorySizeSettingName:         validateLonghornV2DataEngineMemorySize,
 }
 
 type validateSettingUpdateFunc func(request *types.Request, oldSetting *v1beta1.Setting, newSetting *v1beta1.Setting) error
@@ -134,6 +137,7 @@ var validateSettingUpdateFuncs = map[string]validateSettingUpdateFunc{
 	settings.KubeconfigDefaultTokenTTLMinutesSettingName:       validateUpdateKubeConfigTTLSetting,
 	settings.AdditionalGuestMemoryOverheadRatioName:            validateUpdateAdditionalGuestMemoryOverheadRatio,
 	settings.MaxHotplugRatioSettingName:                        validateUpdateMaxHotplugRatio,
+	settings.LonghornV2DataEngineMemorySizeSettingName:         validateUpdateLonghornV2DataEngineMemorySize,
 }
 
 type validateSettingDeleteFunc func(setting *v1beta1.Setting) error
@@ -157,6 +161,7 @@ func NewValidator(
 	vsCache ctlnetworkv1.VlanStatusCache,
 	lhNodeCache ctllhv1b2.NodeCache,
 	secretCache ctlcorev1.SecretCache,
+	nadCache ctlcniv1.NetworkAttachmentDefinitionCache,
 ) types.Validator {
 	validator := &settingValidator{
 		settingCache:       settingCache,
@@ -175,6 +180,8 @@ func NewValidator(
 		vsCache:            vsCache,
 		lhNodeCache:        lhNodeCache,
 		secretCache:        secretCache,
+		nadCache:           nadCache,
+		vmbr:               common.NewVMBackupReader(),
 	}
 
 	validateSettingFuncs[settings.BackupTargetSettingName] = validator.validateBackupTarget
@@ -235,6 +242,8 @@ type settingValidator struct {
 	vsCache            ctlnetworkv1.VlanStatusCache
 	lhNodeCache        ctllhv1b2.NodeCache
 	secretCache        ctlcorev1.SecretCache
+	nadCache           ctlcniv1.NetworkAttachmentDefinitionCache
+	vmbr               common.VMBackupReader
 }
 
 func (v *settingValidator) Resource() types.Resource {
@@ -556,7 +565,7 @@ func (v *settingValidator) validateBackupTarget(setting *v1beta1.Setting) error 
 	if err != nil {
 		return werror.NewInternalError(fmt.Sprintf("Can't list VM backups, err: %+v", err.Error()))
 	}
-	if hasVMBackupInCreatingOrDeletingProgress(vmBackups) {
+	if hasVMBackupInCreatingOrDeletingProgress(vmBackups, v.vmbr) {
 		return werror.NewBadRequest("There is VMBackup in creating or deleting progress")
 	}
 
@@ -986,9 +995,9 @@ func getSystemCerts() *x509.CertPool {
 	return certs
 }
 
-func hasVMBackupInCreatingOrDeletingProgress(vmBackups []*v1beta1.VirtualMachineBackup) bool {
+func hasVMBackupInCreatingOrDeletingProgress(vmBackups []*v1beta1.VirtualMachineBackup, vmbr common.VMBackupReader) bool {
 	for _, vmBackup := range vmBackups {
-		if vmBackup.DeletionTimestamp != nil || vmBackup.Status.ReadyToUse == nil || !*vmBackup.Status.ReadyToUse {
+		if vmbr.GetDeletionTimestamp(vmBackup) != nil || !vmbr.IsReady(vmBackup) {
 			return true
 		}
 	}
@@ -1116,33 +1125,41 @@ func (v *settingValidator) validateNetworkHelper(name, value string) (*networkut
 		return nil, fmt.Errorf("failed to unmarshal the setting value %v, %w", value, err)
 	}
 
-	if err := v.checkNetworkVlanValid(&config); err != nil {
-		return nil, err
+	commonValidators := []func(*networkutil.Config) error{
+		v.checkNetworkVlanValid,
+		v.checkNetworkRangeValid,
+		v.checkVlanStatusReady,
+		v.checkVCSpansAllNodes,
 	}
 
-	if err := v.checkNetworkRangeValid(&config); err != nil {
-		return nil, err
-	}
-
-	if err := v.checkVlanStatusReady(&config); err != nil {
-		return nil, err
-	}
-
-	if err := v.checkVCSpansAllNodes(&config); err != nil {
-		return nil, err
-	}
-
-	// Add a map of setting names to their specific network range validation callbacks
-	networkRangeValidators := map[string]func(*networkutil.Config) error{
-		settings.StorageNetworkName:            v.checkStorageNetworkRangeValid,
-		settings.VMMigrationNetworkSettingName: v.checkVMMigrationNetworkRangeValid,
-		settings.RWXNetworkSettingName:         v.checkRWXNetworkRangeValid,
-	}
-	if validator, ok := networkRangeValidators[name]; ok {
-		if err := validator(&config); err != nil {
+	for _, validate := range commonValidators {
+		if err := validate(&config); err != nil {
 			return nil, err
 		}
 	}
+
+	// validators specific to a setting
+	settingValidators := map[string][]func(*networkutil.Config) error{
+		settings.StorageNetworkName: {
+			v.checkExclusiveVlan,
+			v.checkStorageNetworkRangeValid,
+		},
+		settings.VMMigrationNetworkSettingName: {
+			v.checkVMMigrationNetworkRangeValid,
+		},
+		settings.RWXNetworkSettingName: {
+			v.checkRWXNetworkRangeValid,
+		},
+	}
+
+	if validators, ok := settingValidators[name]; ok {
+		for _, validate := range validators {
+			if err := validate(&config); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return &config, nil
 }
 
@@ -1724,11 +1741,12 @@ func (v *settingValidator) checkVlanStatusReady(config *networkutil.Config) erro
 }
 
 func getMatchNodes(vc *networkv1.VlanConfig) ([]string, error) {
-	if vc.Annotations == nil || vc.Annotations[utils.KeyMatchedNodes] == "" {
-		return nil, fmt.Errorf("vlan config annotations is absent for matched nodes")
+	var matchedNodes []string
+	//skip not ready vlan configs because they will not be applied to any nodes, and if there is at least one ready vlan config spanning all nodes, the network will work fine
+	if vc.Annotations == nil || vc.Annotations[utils.KeyMatchedNodes] == "" || vc.Annotations[utils.KeyMatchedNodes] == "[]" {
+		return matchedNodes, nil
 	}
 
-	var matchedNodes []string
 	if err := json.Unmarshal([]byte(vc.Annotations[utils.KeyMatchedNodes]), &matchedNodes); err != nil {
 		return nil, err
 	}
@@ -1755,6 +1773,7 @@ func (v *settingValidator) checkVCSpansAllNodes(config *networkutil.Config) erro
 		return fmt.Errorf("vlan config not present for cluster network %s", config.ClusterNetwork)
 	}
 
+	//There will be atleast 1 vlanconfig with non-empty matched nodes, else it will be caught by checkVlanStatusReady (len(vsList) will be 0 if there is no vlanconfig)
 	for _, vc := range vcs {
 		vnodes, err := getMatchNodes(vc)
 		if err != nil {
@@ -1777,6 +1796,40 @@ func (v *settingValidator) checkVCSpansAllNodes(config *networkutil.Config) erro
 
 		if !matchedNodes.Contains(node.Name) {
 			return fmt.Errorf("vlanconfig does not span %s", node.Name)
+		}
+	}
+
+	return nil
+}
+
+func (v *settingValidator) checkExclusiveVlan(storageConfig *networkutil.Config) error {
+	if !storageConfig.ExclusiveVlan {
+		return nil
+	}
+
+	//exclusive vlan cannot be untagged or default vlan.
+	if storageConfig.ExclusiveVlan && (storageConfig.Vlan == util.UntaggedVlan || storageConfig.Vlan == util.DefaultVlan) {
+		return fmt.Errorf("exclusive vlan cannot be enabled for vlan %d", storageConfig.Vlan)
+	}
+
+	nads, err := v.nadCache.List(corev1.NamespaceAll, labels.Everything())
+	if err != nil {
+		return err
+	}
+
+	for _, nad := range nads {
+		//skip storage network or overlay NADs
+		if util.IsStorageNetworkNad(nad) || util.IsNetworkTypeOverlay(nad) {
+			continue
+		}
+
+		nadConf, err := util.DecodeNadConfigToNetConf(nad)
+		if err != nil {
+			return err
+		}
+
+		if nadConf.HasTrunkVlanID(storageConfig.Vlan) || nadConf.IsVMNetworkVlan(storageConfig.Vlan) {
+			return fmt.Errorf("storage network cannot use the same vlan %d as VM Network vlan as exclusive vlan is enabled", storageConfig.Vlan)
 		}
 	}
 
@@ -2475,4 +2528,30 @@ func (v *settingValidator) validateUpdateKubeVirtMigration(_ *types.Request, _ *
 
 func (v *settingValidator) validateDeleteClusterPodSecurityStandard(_ *v1beta1.Setting) error {
 	return werror.NewMethodNotAllowed(fmt.Sprintf("Disallow delete setting name %s", settings.ClusterPodSecurityStandardSettingName))
+}
+
+func validateLonghornV2DataEngineMemorySize(newSetting *v1beta1.Setting) error {
+	if newSetting.Value == "" {
+		return nil
+	}
+
+	num, err := webhookUtil.StrictAtoi(newSetting.Value)
+	if err != nil {
+		return err
+	}
+
+	if num <= 0 {
+		return werror.NewInvalidError(fmt.Sprintf("%s must be greater than zero", newSetting.Name), settings.KeywordValue)
+	}
+
+	if num%2 != 0 {
+		// Hugepages are allocated in 2MiB chunks
+		return werror.NewInvalidError(fmt.Sprintf("%s must be evenly divisible by two", newSetting.Name), settings.KeywordValue)
+	}
+
+	return nil
+}
+
+func validateUpdateLonghornV2DataEngineMemorySize(_ *types.Request, _ *v1beta1.Setting, newSetting *v1beta1.Setting) error {
+	return validateLonghornV2DataEngineMemorySize(newSetting)
 }
