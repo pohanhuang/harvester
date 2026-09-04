@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
@@ -14,6 +15,7 @@ import (
 	longhorntypes "github.com/longhorn/longhorn-manager/types"
 	"github.com/pkg/errors"
 	"github.com/rancher/apiserver/pkg/apierror"
+	ctlbatchv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/batch/v1"
 	ctlcorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
 	wranglername "github.com/rancher/wrangler/v3/pkg/name"
@@ -28,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	k8suser "k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/client-go/kubernetes"
@@ -37,13 +40,14 @@ import (
 	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	kubevirtmultus "kubevirt.io/kubevirt/pkg/network/multus"
+	backendstorage "kubevirt.io/kubevirt/pkg/storage/backend-storage"
+	"kubevirt.io/kubevirt/pkg/tpm"
 	kubevirtutil "kubevirt.io/kubevirt/pkg/virt-operator/util"
 
 	apiutil "github.com/harvester/harvester/pkg/api/util"
 	volumeapi "github.com/harvester/harvester/pkg/api/volume"
 	harvesterv1 "github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
 	"github.com/harvester/harvester/pkg/builder"
-	nodecontroller "github.com/harvester/harvester/pkg/controller/master/node"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
 	ctlcniv1 "github.com/harvester/harvester/pkg/generated/controllers/k8s.cni.cncf.io/v1"
 	ctlkubevirtv1 "github.com/harvester/harvester/pkg/generated/controllers/kubevirt.io/v1"
@@ -77,6 +81,7 @@ type vmActionHandler struct {
 	vmio                      vmicommon.VMIOperator
 
 	backupClient            ctlharvesterv1.VirtualMachineBackupClient
+	jobClient               ctlbatchv1.JobClient
 	pvcClient               ctlcorev1.PersistentVolumeClaimClient
 	resourceQuotaClient     ctlharvesterv1.ResourceQuotaClient
 	restoreClient           ctlharvesterv1.VirtualMachineRestoreClient
@@ -89,6 +94,7 @@ type vmActionHandler struct {
 	vmimClient              ctlkubevirtv1.VirtualMachineInstanceMigrationClient
 
 	backupCache       ctlharvesterv1.VirtualMachineBackupCache
+	jobCache          ctlbatchv1.JobCache
 	kubevirtCache     ctlkubevirtv1.KubeVirtCache
 	nadCache          ctlcniv1.NetworkAttachmentDefinitionCache
 	nodeCache         ctlcorev1.NodeCache
@@ -121,19 +127,19 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case insertCdRomVolume:
 		var input InsertCdRomVolumeActionInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
-		return nil, h.insertCdRomVolume(name, namespace, input)
+		return nil, h.insertCdRomVolume(r.Context(), user, name, namespace, input)
 	case ejectCdRomVolume:
 		var input EjectCdRomVolumeActionInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		return nil, h.ejectCdRomVolume(r.Context(), name, namespace, input)
 	case migrate:
 		var input MigrateInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		return nil, h.migrate(r.Context(), namespace, name, input.NodeName)
 	case abortMigration:
@@ -156,11 +162,14 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case backupVM:
 		var input BackupInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 
 		if input.Name == "" {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter backup name is required")
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter `name` is required")
+		}
+		if input.FsFreezeDeadline != nil && input.FsFreezeDeadline.Duration < 0 {
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter `fsFreezeDeadline` must not be negative")
 		}
 
 		if err := h.checkBackupTargetConfigured(); err != nil {
@@ -178,7 +187,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case restoreVM:
 		var input RestoreInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 
 		if input.Name == "" || input.BackupName == "" {
@@ -196,7 +205,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case createTemplate:
 		var input CreateTemplateInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 
 		if input.Name == "" {
@@ -206,7 +215,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case addVolume:
 		var input AddVolumeInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		if input.DiskName == "" || input.VolumeSourceName == "" {
 			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter `diskName` and `volumeName` are required")
@@ -215,7 +224,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case removeVolume:
 		var input RemoveVolumeInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		if input.DiskName == "" {
 			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter `volumeName` are required")
@@ -224,13 +233,13 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case addNic:
 		var input AddNicInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		return nil, h.addNic(r.Context(), namespace, name, input)
 	case removeNic:
 		var input RemoveNicInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		return nil, h.removeNic(r.Context(), namespace, name, input)
 	case findHotunpluggableNics:
@@ -238,7 +247,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	case cloneVM:
 		var input CloneInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 
 		if input.TargetVM == "" {
@@ -295,13 +304,13 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 		}
 		var input CPUAndMemoryHotplugInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		return nil, h.cpuAndMemoryHotplug(namespace, name, input)
 	case storageMigration:
 		var input StorageMigrationInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Failed to decode request body: %v "+err.Error())
+			return nil, apierror.NewAPIError(validation.InvalidBodyContent, fmt.Sprintf("Failed to decode request body: %v", err))
 		}
 		if input.SourceVolume == "" || input.TargetVolume == "" {
 			return nil, apierror.NewAPIError(validation.InvalidBodyContent, "Parameter `sourceVolume` and `targetVolume` are required")
@@ -319,7 +328,7 @@ func (h *vmActionHandler) Do(ctx *harvesterServer.Ctx) (harvesterServer.Response
 	return nil, nil
 }
 
-func (h *vmActionHandler) insertCdRomVolume(name, namespace string, input InsertCdRomVolumeActionInput) error {
+func (h *vmActionHandler) insertCdRomVolume(ctx context.Context, userInfo k8suser.Info, name, namespace string, input InsertCdRomVolumeActionInput) error {
 	vm, err := h.vmCache.Get(namespace, name)
 	if err != nil {
 		return err
@@ -335,8 +344,13 @@ func (h *vmActionHandler) insertCdRomVolume(name, namespace string, input Insert
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid image name: %s, should be namespace/name", input.ImageName)
 	}
+	imageNS, imageName := parts[0], parts[1]
 
-	vmImage, err := h.vmImageCache.Get(parts[0], parts[1])
+	if err := h.checkVMImageAccess(ctx, userInfo, imageNS, imageName); err != nil {
+		return err
+	}
+
+	vmImage, err := h.vmImageCache.Get(imageNS, imageName)
 	if err != nil {
 		return err
 	}
@@ -386,6 +400,30 @@ func (h *vmActionHandler) insertCdRomVolume(name, namespace string, input Insert
 	vmCopy.Spec.Template.Spec.Volumes = append(vmCopy.Spec.Template.Spec.Volumes, newVol)
 	_, err = h.vmClient.Update(vmCopy)
 	return err
+}
+
+func (h *vmActionHandler) checkVMImageAccess(ctx context.Context, userInfo k8suser.Info, namespace, name string) error {
+	if h.clientSet == nil {
+		return apierror.NewAPIError(validation.ServerError, "Kubernetes client is not configured")
+	}
+
+	allowed, err := util.CheckObjectAccess(ctx, util.ResourceAccessCheck{
+		SAR:       h.clientSet.AuthorizationV1().SubjectAccessReviews(),
+		Username:  userInfo.GetName(),
+		Groups:    userInfo.GetGroups(),
+		Verb:      util.VerbGet,
+		GVR:       util.VirtualMachineImageGVR,
+		Namespace: namespace,
+		Name:      name,
+	})
+	if err != nil {
+		return apierror.NewAPIError(validation.ServerError, fmt.Sprintf("Failed to check access to image %s/%s: %v", namespace, name, err))
+	}
+	if !allowed {
+		return apierror.NewAPIError(validation.PermissionDenied, fmt.Sprintf("user %q is not allowed to access image %s/%s", userInfo.GetName(), namespace, name))
+	}
+
+	return nil
 }
 
 func (h *vmActionHandler) ejectCdRomVolume(ctx context.Context, name, namespace string, input EjectCdRomVolumeActionInput) error {
@@ -716,7 +754,7 @@ func (h *vmActionHandler) findMigratableNodesByVMI(vmi *kubevirtv1.VirtualMachin
 }
 
 func isDrained(node *corev1.Node) bool {
-	if _, ok := node.Annotations[nodecontroller.MaintainStatusAnnotationKey]; ok {
+	if _, ok := node.Annotations[util.MaintainStatusAnnotationKey]; ok {
 		return ok
 	}
 	if _, ok := node.Annotations[drainhelper.DrainAnnotation]; ok {
@@ -863,12 +901,15 @@ func (h *vmActionHandler) createVMBackup(vmName, vmNamespace string, input Backu
 				Kind:     kubevirtv1.VirtualMachineGroupVersionKind.Kind,
 				Name:     vmName,
 			},
-			Type: harvesterv1.Backup,
+			Type:             harvesterv1.Backup,
+			FsFreezeDeadline: input.FsFreezeDeadline,
 		},
 	}
+
 	if _, err := h.backupClient.Create(backup); err != nil {
 		return fmt.Errorf("failed to create VM backup, error: %s", err.Error())
 	}
+
 	return nil
 }
 
@@ -876,7 +917,18 @@ func (h *vmActionHandler) restoreBackup(vmName, vmNamespace string, input Restor
 	if _, err := h.backupCache.Get(vmNamespace, input.BackupName); err != nil {
 		return err
 	}
-	apiGroup := kubevirtv1.SchemeGroupVersion.Group
+
+	restore := buildVirtualMachineRestore(vmName, vmNamespace, input)
+
+	_, err := h.restoreClient.Create(restore)
+	if err != nil {
+		return fmt.Errorf("failed to create restore, error: %v", err)
+	}
+
+	return nil
+}
+
+func buildVirtualMachineRestore(vmName, vmNamespace string, input RestoreInput) *harvesterv1.VirtualMachineRestore {
 	restore := &harvesterv1.VirtualMachineRestore{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      input.Name,
@@ -884,7 +936,7 @@ func (h *vmActionHandler) restoreBackup(vmName, vmNamespace string, input Restor
 		},
 		Spec: harvesterv1.VirtualMachineRestoreSpec{
 			Target: corev1.TypedLocalObjectReference{
-				APIGroup: &apiGroup,
+				APIGroup: ptr.To(kubevirtv1.SchemeGroupVersion.Group),
 				Kind:     kubevirtv1.VirtualMachineGroupVersionKind.Kind,
 				Name:     vmName,
 			},
@@ -893,12 +945,16 @@ func (h *vmActionHandler) restoreBackup(vmName, vmNamespace string, input Restor
 			NewVM:                         false,
 		},
 	}
-	_, err := h.restoreClient.Create(restore)
-	if err != nil {
-		return fmt.Errorf("failed to create restore, error: %s", err.Error())
+
+	if input.KeepMacAddress {
+		restore.Spec.KeepMacAddress = true
 	}
 
-	return nil
+	if input.HaltAfterRestore {
+		restore.Spec.HaltAfterRestore = true
+	}
+
+	return restore
 }
 
 func (h *vmActionHandler) checkBackupTargetConfigured() error {
@@ -986,6 +1042,12 @@ func (h *vmActionHandler) addVolume(ctx context.Context, namespace, name string,
 		return err
 	}
 
+	if input.Shareable {
+		if err := virtualmachine.CheckShareableVolume(h.pvcCache, h.storageClassCache, namespace, input.VolumeSourceName); err != nil {
+			return err
+		}
+	}
+
 	vm, err := h.vmCache.Get(namespace, name)
 	if err != nil {
 		return err
@@ -1002,6 +1064,9 @@ func (h *vmActionHandler) addVolume(ctx context.Context, namespace, name string,
 				Bus: "scsi",
 			},
 		},
+	}
+	if input.Shareable {
+		newDisk.Shareable = ptr.To(true)
 	}
 	newVol := kubevirtv1.Volume{
 		Name: input.DiskName,
@@ -1229,6 +1294,8 @@ func (h *vmActionHandler) findHotunpluggableNics(rw http.ResponseWriter, namespa
 }
 
 // cloneVM creates a VM which uses volume cloning from the source VM.
+// AnnotationBSCloneStatus signals the clone progress to the UI.
+// "cloning" = in progress, "cloned" = done.
 func (h *vmActionHandler) cloneVM(name string, namespace string, input CloneInput) error {
 	vm, err := h.vmCache.Get(namespace, name)
 	if err != nil {
@@ -1247,6 +1314,12 @@ func (h *vmActionHandler) cloneVM(name string, namespace string, input CloneInpu
 	newPVCsString, err := util.MarshalVolumeClaimTemplates(newEntries)
 	if err != nil {
 		return fmt.Errorf("cannot marshal value %+v, err: %w", newEntries, err)
+	}
+
+	if backendstorage.IsBackendStorageNeeded(newVM) {
+		if err := h.prepareBackendStorageClone(newVM, vm); err != nil {
+			return fmt.Errorf("prepare backend storage clone error for new vm %s/%s, err %w", newVM.Namespace, newVM.Name, err)
+		}
 	}
 
 	newVM.ObjectMeta.Annotations[util.AnnotationVolumeClaimTemplates] = newPVCsString
@@ -1352,6 +1425,75 @@ func cloneSecretVolume(volume *kubevirtv1.Volume, secretNameMap map[string]strin
 		secretNameMap[volume.Secret.SecretName] = names.SimpleNameGenerator.GenerateName("clone-")
 	}
 	volume.Secret.SecretName = secretNameMap[volume.Secret.SecretName]
+}
+
+func (h *vmActionHandler) prepareBackendStorageClone(newVM, sourceVM *kubevirtv1.VirtualMachine) error {
+	runStrategy, err := newVM.RunStrategy()
+	if err != nil {
+		return err
+	}
+
+	// Backend storage PVCs are KubeVirt-managed and not tracked in
+	// vm.Spec.Template.Spec.Volumes. If the source VM has no current backend
+	// storage PVC yet, there is no state to clone and we should fall back to a
+	// normal VM clone.
+	sourcePVCs, err := h.pvcCache.List(sourceVM.Namespace, labels.SelectorFromSet(labels.Set{
+		backendstorage.PVCPrefix: sourceVM.Name,
+	}))
+	if err != nil {
+		return fmt.Errorf("failed to list backend storage PVCs for source VM %s/%s: %w", sourceVM.Namespace, sourceVM.Name, err)
+	}
+
+	switch len(sourcePVCs) {
+	case 0:
+		return nil
+	case 1:
+		// continue the clone process.
+	default:
+		return fmt.Errorf("expected exactly 1 backend storage PVC for source VM %s/%s (label %s=%s), got %d", sourceVM.Namespace, sourceVM.Name, backendstorage.PVCPrefix, sourceVM.Name, len(sourcePVCs))
+	}
+
+	newVM.Annotations[util.AnnotationBSCloneRunStrategy] = string(runStrategy)
+	newVM.Annotations[util.AnnotationBSCloneSourceVM] = sourceVM.Name
+	if cloneAction := h.determineCloneAction(newVM); cloneAction != "" {
+		newVM.Annotations[util.AnnotationBSCloneActions] = cloneAction
+	}
+	newVM.Annotations[util.AnnotationBSCloneStartTime] = time.Now().Format(time.RFC3339)
+
+	halted := kubevirtv1.RunStrategyHalted
+	newVM.Spec.RunStrategy = &halted
+	newVM.Annotations[util.AnnotationBSCloneStatus] = util.CloneInProgress
+	return nil
+}
+
+// determineCloneAction determines what post-clone action is needed based on the
+// clone VM's desired backend storage configuration (EFI/TPM).
+// The backend storage PVC is always cloned entirely from the source, but the clone VM
+// spec may differ (e.g., user disables EFI or TPM in the clone), requiring cleanup.
+//
+// [Cases]
+// Clone both: needs to rename EFI NVRAM file from source VM.
+// Clone TPM only: needs to delete EFI files from cloned PVC.
+// Clone EFI only: needs to delete TPM state from cloned PVC.
+// Clone CBT only (or no EFI/TPM): no post-clone Job is needed.
+func (h *vmActionHandler) determineCloneAction(cloneVM *kubevirtv1.VirtualMachine) string {
+	if cloneVM == nil || cloneVM.Spec.Template == nil {
+		return ""
+	}
+
+	cloneHasEFI := backendstorage.HasPersistentEFI(&cloneVM.Spec.Template.Spec)
+	cloneHasTPM := tpm.HasPersistentDevice(&cloneVM.Spec.Template.Spec)
+
+	switch {
+	case cloneHasEFI && cloneHasTPM:
+		return util.CloneActionRenameEFI
+	case cloneHasEFI:
+		return util.CloneActionDeleteTPMRenameEFI
+	case cloneHasTPM:
+		return util.CloneActionDeleteEFI
+	default:
+		return ""
+	}
 }
 
 func (h *vmActionHandler) dismissInsufficientResourceQuota(name, namespace string) error {

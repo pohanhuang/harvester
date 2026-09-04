@@ -17,7 +17,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/kubectl/pkg/drain"
 
-	ctlnode "github.com/harvester/harvester/pkg/controller/master/node"
 	"github.com/harvester/harvester/pkg/util"
 )
 
@@ -137,7 +136,7 @@ func DrainPossible(nodeCache ctlcorev1.NodeCache, node *corev1.Node) error {
 
 	var availableNodes int
 	for _, v := range nodeMap {
-		_, ok := v.Annotations[ctlnode.MaintainStatusAnnotationKey]
+		_, ok := v.Annotations[util.MaintainStatusAnnotationKey]
 		logrus.Debugf("nodeName: %s,  annotation present: %v", v.Name, ok)
 		if !ok {
 			availableNodes++
@@ -159,7 +158,7 @@ func maintainModeStrategyFilter(pod corev1.Pod) drain.PodDeleteStatus {
 		// Ignore Pods of VMs that should not be migrated in maintenance mode. These
 		// VMs are forcibly shut down when maintenance mode is activated.
 		value, ok := pod.Labels[util.LabelMaintainModeStrategy]
-		if ok && slices.Contains(util.MaintainModeStrategyShutdownValues, value) {
+		if ok && slices.Contains(util.MaintainModeStrategyShutdownValues, value) { //nolint:govet // inline analyzer: slices.Contains cannot be inlined yet (generic type inference), not actionable
 			logrus.WithFields(logrus.Fields{
 				"kind":                         "pod",
 				"namespace":                    pod.Namespace,

@@ -4,12 +4,15 @@ import (
 	"testing"
 
 	cniv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
+	longhorn "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	corefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	"github.com/harvester/harvester/pkg/generated/clientset/versioned/fake"
@@ -240,7 +243,7 @@ func TestCheckMaintenanceModeStrategyIsValid(t *testing.T) {
 		},
 	}
 
-	validator := NewValidator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
+	validator := NewValidator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
 
 	for _, tc := range testCases {
 		err := validator.checkMaintenanceModeStrategyIsValid(tc.newVM, tc.oldVM)
@@ -680,16 +683,16 @@ func Test_virtualMachineValidator_duplicateMacAddress(t *testing.T) {
 	}
 
 	label1 := make(map[string]string)
-	label1[keyClusterNetwork] = "cluster-1"
+	label1[util.KeyClusterNetwork] = "cluster-1"
 
 	label2 := make(map[string]string)
-	label2[keyClusterNetwork] = "cluster-2"
+	label2[util.KeyClusterNetwork] = "cluster-2"
 
 	label3 := make(map[string]string)
-	label3[keyClusterNetwork] = "cluster-3"
+	label3[util.KeyClusterNetwork] = "cluster-3"
 
 	label4 := make(map[string]string)
-	label4[keyClusterNetwork] = "cluster-1"
+	label4[util.KeyClusterNetwork] = "cluster-1"
 
 	existingNADs := []*cniv1.NetworkAttachmentDefinition{
 		{
@@ -888,7 +891,7 @@ func Test_virtualMachineValidator_duplicateMacAddress(t *testing.T) {
 	fakeVMCache := fakeclients.VirtualMachineCache(clientset.KubevirtV1().VirtualMachines)
 	fakeNadCache := fakeclients.NetworkAttachmentDefinitionCache(clientset.K8sCniCncfIoV1().NetworkAttachmentDefinitions)
 
-	validator := NewValidator(nil, nil, nil, nil, nil, nil, fakeVMCache, nil, fakeNadCache, nil, nil, nil).(*vmValidator)
+	validator := NewValidator(nil, nil, nil, nil, nil, nil, fakeVMCache, nil, fakeNadCache, nil, nil, nil, nil, nil).(*vmValidator)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -946,13 +949,15 @@ func TestVmValidator_Update(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		oldVM         *kubevirtv1.VirtualMachine
-		newVM         *kubevirtv1.VirtualMachine
-		oldObjMeta    *metav1.ObjectMeta
-		newObjMeta    *metav1.ObjectMeta
-		newSpec       *kubevirtv1.VirtualMachineSpec
-		expectedError bool
+		name                    string
+		oldVM                   *kubevirtv1.VirtualMachine
+		newVM                   *kubevirtv1.VirtualMachine
+		scErr                   bool
+		sarDenied               bool
+		oldObjMeta              *metav1.ObjectMeta
+		newObjMeta              *metav1.ObjectMeta
+		newSpec                 *kubevirtv1.VirtualMachineSpec
+		expectedValidationError bool
 	}{
 		{
 			name:  "Ensure that maintenance mode strategy is checked if there is no change to VM spec",
@@ -965,8 +970,8 @@ func TestVmValidator_Update(t *testing.T) {
 				}
 				return m
 			}(),
-			newSpec:       nil,
-			expectedError: true,
+			newSpec:                 nil,
+			expectedValidationError: true,
 		},
 		{
 			name:  "storage class name is changed which results in rejection",
@@ -982,8 +987,8 @@ func TestVmValidator_Update(t *testing.T) {
 						`,"volumeMode":"Block","storageClassName":"longhorn"}}]`,
 				},
 			},
-			newSpec:       nil,
-			expectedError: true,
+			newSpec:                 nil,
+			expectedValidationError: true,
 		},
 		{
 			name:  "annotation removed resulting in success",
@@ -993,8 +998,8 @@ func TestVmValidator_Update(t *testing.T) {
 				Name:      templateVM.Name,
 				Namespace: templateVM.Namespace,
 			},
-			newSpec:       nil,
-			expectedError: false,
+			newSpec:                 nil,
+			expectedValidationError: false,
 		},
 		{
 			name:  "annotation added resulting in success",
@@ -1013,8 +1018,8 @@ func TestVmValidator_Update(t *testing.T) {
 						`"Block","storageClassName":"longhorn"}}]`,
 				},
 			},
-			newSpec:       nil,
-			expectedError: false,
+			newSpec:                 nil,
+			expectedValidationError: false,
 		},
 		{
 			name:  "annotations with bad json are rejected",
@@ -1027,8 +1032,8 @@ func TestVmValidator_Update(t *testing.T) {
 					"harvesterhci.io/volumeClaimTemplates": `[{"]`,
 				},
 			},
-			newSpec:       nil,
-			expectedError: true,
+			newSpec:                 nil,
+			expectedValidationError: true,
 		},
 		{
 			name:  "empty annotation is allowed on both objects",
@@ -1048,8 +1053,8 @@ func TestVmValidator_Update(t *testing.T) {
 					"harvesterhci.io/volumeClaimTemplates": "",
 				},
 			},
-			newSpec:       nil,
-			expectedError: false,
+			newSpec:                 nil,
+			expectedValidationError: false,
 		},
 		{
 			name:  "nil storage class name is handled properly",
@@ -1068,10 +1073,134 @@ func TestVmValidator_Update(t *testing.T) {
 						`"Block"}}]`,
 				},
 			},
-			newSpec:       nil,
-			expectedError: false,
+			newSpec:                 nil,
+			expectedValidationError: false,
+		},
+		{
+			name:  "re-adding annotation after deletion with non-existing storage class is rejected",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+			},
+			newObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"metadata":{"name":"test-disk-0",` +
+						`"annotations":{"harvesterhci.io/imageId":"default/image"}},` +
+						`"spec":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"10Gi"}}` +
+						`,"volumeMode":"Block","storageClassName":"non-existing-sc"}}]`,
+				},
+			},
+			expectedValidationError: true,
+		},
+		{
+			name:  "adding annotation for the first time with existing storage class is allowed",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+			},
+			newObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"metadata":{"name":"test-disk-0",` +
+						`"annotations":{"harvesterhci.io/imageId":"default/image"}},` +
+						`"spec":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"10Gi"}}` +
+						`,"volumeMode":"Block","storageClassName":"longhorn-image"}}]`,
+				},
+			},
+			expectedValidationError: false,
+		},
+		{
+			name:  "adding annotation with invalid JSON when old annotation is absent is rejected",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+			},
+			newObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"broken json`,
+				},
+			},
+			expectedValidationError: true,
+		},
+		{
+			name:                    "nil old VM is handled safely",
+			oldVM:                   nil,
+			newVM:                   templateVM.DeepCopy(),
+			expectedValidationError: false,
+		},
+		{
+			name:  "storage class cache internal error on first-time annotation add is surfaced",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			scErr: true,
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+			},
+			newObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"metadata":{"name":"test-disk-0",` +
+						`"annotations":{"harvesterhci.io/imageId":"default/image"}},` +
+						`"spec":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"10Gi"}}` +
+						`,"volumeMode":"Block","storageClassName":"longhorn-image"}}]`,
+				},
+			},
+			expectedValidationError: true,
+		},
+		{
+			name:  "malformed old annotation with valid new annotation is rejected",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"broken`,
+				},
+			},
+			newObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"metadata":{"name":"test-disk-0",` +
+						`"annotations":{"harvesterhci.io/imageId":"default/image"}},` +
+						`"spec":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"10Gi"}}` +
+						`,"volumeMode":"Block","storageClassName":"longhorn-image"}}]`,
+				},
+			},
+			expectedValidationError: true,
+		},
+		{
+			// oldObjMeta has no annotation so oldAnn != newAnn, triggering the SAR check
+			name:  "SAR check denied for image access is rejected",
+			oldVM: templateVM.DeepCopy(),
+			newVM: templateVM.DeepCopy(),
+			oldObjMeta: &metav1.ObjectMeta{
+				Name:      templateVM.Name,
+				Namespace: templateVM.Namespace,
+			},
+			sarDenied:               true,
+			expectedValidationError: true,
 		},
 	}
+
+	allowedFakeSAR := fakeclients.AllowedSARClient()
+	denyFakeSAR := fakeclients.DeniedSARClient()
+
+	fakeRequest := fakeclients.NewFakeRequest("test-user")
 
 	corefakeclientset := corefake.NewClientset()
 	err := corefakeclientset.Tracker().Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
@@ -1079,7 +1208,35 @@ func TestVmValidator_Update(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 	fakeNSCache := fakeclients.NamespaceCache(corefakeclientset.CoreV1().Namespaces)
-	validator := NewValidator(fakeNSCache, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
+
+	harvesterFakeClientset := fake.NewSimpleClientset()
+	// SC must be a Longhorn provisioner with a backingImage so checkVolumeClaimTemplateEntry
+	// resolves the backing image ID and reaches the SAR check.
+	err = harvesterFakeClientset.Tracker().Add(&storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "longhorn-image"},
+		Provisioner: util.CSIProvisionerLonghorn,
+		Parameters:  map[string]string{util.LonghornOptionBackingImageName: "test-bi"},
+	})
+	assert.NoError(t, err)
+	// "longhorn" SC has no backingImage param, so image-access check is skipped for entries using it.
+	err = harvesterFakeClientset.Tracker().Add(&storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "longhorn"},
+		Provisioner: util.CSIProvisionerLonghorn,
+		Parameters:  map[string]string{},
+	})
+	assert.NoError(t, err)
+	err = harvesterFakeClientset.Tracker().Add(&longhorn.BackingImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-bi",
+			Namespace:   util.LonghornSystemNamespaceName,
+			Annotations: map[string]string{util.AnnotationImageID: "default/image"},
+		},
+	})
+	assert.NoError(t, err)
+	fakeScCache := fakeclients.StorageClassCache(harvesterFakeClientset.StorageV1().StorageClasses)
+	fakeBICache := fakeclients.BackingImageCache(harvesterFakeClientset.LonghornV1beta2().BackingImages)
+
+	validator := NewValidator(fakeNSCache, nil, nil, nil, nil, nil, nil, nil, nil, nil, fakeScCache, nil, fakeBICache, nil).(*vmValidator)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1092,9 +1249,19 @@ func TestVmValidator_Update(t *testing.T) {
 			if test.newSpec != nil {
 				test.newVM.Spec = *test.newSpec
 			}
-			err := validator.Update(nil, test.oldVM, test.newVM)
+			if test.scErr {
+				validator.scCache = fakeclients.ErroringStorageClassCache{}
+			} else {
+				validator.scCache = fakeScCache
+			}
+			if test.sarDenied {
+				validator.sar = denyFakeSAR
+			} else {
+				validator.sar = allowedFakeSAR
+			}
+			err := validator.Update(fakeRequest, test.oldVM, test.newVM)
 
-			if test.expectedError {
+			if test.expectedValidationError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
@@ -1243,7 +1410,7 @@ func TestCheckCdRomVolumeIsValid(t *testing.T) {
 		},
 	}
 
-	validator := NewValidator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
+	validator := NewValidator(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1670,7 +1837,7 @@ func TestCheckTargetVolumes(t *testing.T) {
 				assert.NoError(t, err, "Mock resource should add into fake controller tracker")
 			}
 			pvcCache := fakeclients.PersistentVolumeClaimCache(clientset.CoreV1().PersistentVolumeClaims)
-			validator := NewValidator(nil, nil, pvcCache, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
+			validator := NewValidator(nil, nil, pvcCache, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*vmValidator)
 
 			err := validator.checkTargetVolumes(nil, tc.vm)
 			if tc.expectError {
@@ -1680,6 +1847,380 @@ func TestCheckTargetVolumes(t *testing.T) {
 				}
 			} else {
 				assert.Nil(t, err, tc.name)
+			}
+		})
+	}
+}
+
+func TestCheckShareableVolumes(t *testing.T) {
+	blockMode := corev1.PersistentVolumeBlock
+	fsMode := corev1.PersistentVolumeFilesystem
+
+	newPVC := func(name, provisioner string, accessMode corev1.PersistentVolumeAccessMode, volumeMode *corev1.PersistentVolumeMode) *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        name,
+				Namespace:   "default",
+				Annotations: map[string]string{util.AnnStorageProvisioner: provisioner},
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{accessMode},
+				VolumeMode:  volumeMode,
+			},
+		}
+	}
+
+	pvcVolume := func(name, claimName string) kubevirtv1.Volume {
+		return kubevirtv1.Volume{
+			Name: name,
+			VolumeSource: kubevirtv1.VolumeSource{
+				PersistentVolumeClaim: &kubevirtv1.PersistentVolumeClaimVolumeSource{
+					PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{ClaimName: claimName},
+				},
+			},
+		}
+	}
+
+	// rootdisk boots (bootOrder 1), data disk carries the shareable flag
+	newVM := func(dataDisk kubevirtv1.Disk, volumes ...kubevirtv1.Volume) *kubevirtv1.VirtualMachine {
+		rootDisk := kubevirtv1.Disk{Name: "rootdisk", BootOrder: ptr.To(uint(1))}
+		return &kubevirtv1.VirtualMachine{
+			ObjectMeta: metav1.ObjectMeta{Name: "vm1", Namespace: "default"},
+			Spec: kubevirtv1.VirtualMachineSpec{
+				Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+					Spec: kubevirtv1.VirtualMachineInstanceSpec{
+						Domain: kubevirtv1.DomainSpec{
+							Devices: kubevirtv1.Devices{Disks: []kubevirtv1.Disk{rootDisk, dataDisk}},
+						},
+						Volumes: append([]kubevirtv1.Volume{pvcVolume("rootdisk", "root-pvc")}, volumes...),
+					},
+				},
+			},
+		}
+	}
+
+	shareableDisk := kubevirtv1.Disk{Name: "datadisk", Shareable: ptr.To(true)}
+
+	tests := []struct {
+		name     string
+		pvc      *corev1.PersistentVolumeClaim
+		vm       *kubevirtv1.VirtualMachine
+		errorKey string
+	}{
+		{
+			name: "non-shareable disks pass",
+			vm:   newVM(kubevirtv1.Disk{Name: "datadisk"}, pvcVolume("datadisk", "data-pvc")),
+		},
+		{
+			name: "shareable RWX block third-party volume passes",
+			pvc:  newPVC("data-pvc", "some.san.csi.io", corev1.ReadWriteMany, &blockMode),
+			vm:   newVM(shareableDisk, pvcVolume("datadisk", "data-pvc")),
+		},
+		{
+			name:     "shareable PVC not found rejected (requires an existing volume)",
+			vm:       newVM(shareableDisk, pvcVolume("datadisk", "data-pvc")),
+			errorKey: "requires an existing volume",
+		},
+		{
+			name:     "shareable RWO volume rejected",
+			pvc:      newPVC("data-pvc", "some.san.csi.io", corev1.ReadWriteOnce, &blockMode),
+			vm:       newVM(shareableDisk, pvcVolume("datadisk", "data-pvc")),
+			errorKey: "ReadWriteMany",
+		},
+		{
+			name:     "shareable filesystem volume rejected",
+			pvc:      newPVC("data-pvc", "some.san.csi.io", corev1.ReadWriteMany, &fsMode),
+			vm:       newVM(shareableDisk, pvcVolume("datadisk", "data-pvc")),
+			errorKey: "volumeMode must be Block",
+		},
+		{
+			name:     "shareable Longhorn volume rejected",
+			pvc:      newPVC("data-pvc", util.CSIProvisionerLonghorn, corev1.ReadWriteMany, &blockMode),
+			vm:       newVM(shareableDisk, pvcVolume("datadisk", "data-pvc")),
+			errorKey: "provisioner other than Longhorn",
+		},
+		{
+			name: "shareable boot disk rejected",
+			pvc:  newPVC("data-pvc", "some.san.csi.io", corev1.ReadWriteMany, &blockMode),
+			vm: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm1", Namespace: "default"},
+				Spec: kubevirtv1.VirtualMachineSpec{
+					Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+						Spec: kubevirtv1.VirtualMachineInstanceSpec{
+							Domain: kubevirtv1.DomainSpec{
+								Devices: kubevirtv1.Devices{Disks: []kubevirtv1.Disk{{Name: "datadisk", Shareable: ptr.To(true)}}},
+							},
+							Volumes: []kubevirtv1.Volume{pvcVolume("datadisk", "data-pvc")},
+						},
+					},
+				},
+			},
+			errorKey: "boot disk",
+		},
+		{
+			name:     "shareable disk with writeback cache rejected",
+			pvc:      newPVC("data-pvc", "some.san.csi.io", corev1.ReadWriteMany, &blockMode),
+			vm:       newVM(kubevirtv1.Disk{Name: "datadisk", Shareable: ptr.To(true), Cache: kubevirtv1.CacheWriteBack}, pvcVolume("datadisk", "data-pvc")),
+			errorKey: "cache mode none",
+		},
+		{
+			name:     "shareable disk without PVC volume rejected",
+			vm:       newVM(shareableDisk, kubevirtv1.Volume{Name: "datadisk", VolumeSource: kubevirtv1.VolumeSource{ContainerDisk: &kubevirtv1.ContainerDiskSource{Image: "img"}}}),
+			errorKey: "backed by a persistent volume claim",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			harvesterFakeClientset := fake.NewSimpleClientset()
+			if tc.pvc != nil {
+				assert.NoError(t, harvesterFakeClientset.Tracker().Add(tc.pvc))
+			}
+			validator := &vmValidator{
+				pvcCache: fakeclients.PersistentVolumeClaimCache(harvesterFakeClientset.CoreV1().PersistentVolumeClaims),
+				scCache:  fakeclients.StorageClassCache(harvesterFakeClientset.StorageV1().StorageClasses),
+			}
+
+			err := validator.checkShareableVolumes(tc.vm)
+
+			if tc.errorKey != "" {
+				assert.Error(t, err, tc.name)
+				assert.Contains(t, err.Error(), tc.errorKey, tc.name)
+			} else {
+				assert.NoError(t, err, tc.name)
+			}
+		})
+	}
+}
+
+func TestGetVMImageIDFromSC(t *testing.T) {
+	const (
+		scName     = "lh-test-sc"
+		biName     = "vmi-test-bi"
+		imageID    = "default/image-abc"
+		otherImage = "default/image-xyz"
+	)
+
+	newSC := func(provisioner, backingImage string) *storagev1.StorageClass {
+		params := map[string]string{}
+		if backingImage != "" {
+			params[util.LonghornOptionBackingImageName] = backingImage
+		}
+		return &storagev1.StorageClass{
+			ObjectMeta:  metav1.ObjectMeta{Name: scName},
+			Provisioner: provisioner,
+			Parameters:  params,
+		}
+	}
+
+	newBI := func(annotationImageID string) *longhorn.BackingImage {
+		annotations := map[string]string{}
+		if annotationImageID != "" {
+			annotations[util.AnnotationImageID] = annotationImageID
+		}
+		return &longhorn.BackingImage{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        biName,
+				Namespace:   util.LonghornSystemNamespaceName,
+				Annotations: annotations,
+			},
+		}
+	}
+
+	tests := []struct {
+		name            string
+		sc              *storagev1.StorageClass
+		bi              *longhorn.BackingImage
+		expectedImageID string
+		expectError     bool
+	}{
+		{
+			name:        "sc not found, returns error",
+			expectError: true,
+		},
+		{
+			name:            "sc is not longhorn provisioner, returns empty",
+			sc:              newSC("other.csi.driver", biName),
+			expectedImageID: "",
+		},
+		{
+			name:            "longhorn sc without backingImage param, returns empty",
+			sc:              newSC(util.CSIProvisionerLonghorn, ""),
+			expectedImageID: "",
+		},
+		{
+			name:        "longhorn sc with backingImage param but BackingImage not found, returns error",
+			sc:          newSC(util.CSIProvisionerLonghorn, biName),
+			expectError: true,
+		},
+		{
+			name:            "backing image has vmImageId annotation, returns vmImage ID",
+			sc:              newSC(util.CSIProvisionerLonghorn, biName),
+			bi:              newBI(imageID),
+			expectedImageID: imageID,
+		},
+		{
+			name:            "backing image has different vmImageId annotation, returns that vmImage ID",
+			sc:              newSC(util.CSIProvisionerLonghorn, biName),
+			bi:              newBI(otherImage),
+			expectedImageID: otherImage,
+		},
+		{
+			name:            "backing image has no vmImageId annotation, returns empty",
+			sc:              newSC(util.CSIProvisionerLonghorn, biName),
+			bi:              newBI(""),
+			expectedImageID: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset()
+
+			if tc.sc != nil {
+				assert.NoError(t, clientset.Tracker().Add(tc.sc))
+			}
+			if tc.bi != nil {
+				assert.NoError(t, clientset.Tracker().Add(tc.bi))
+			}
+
+			v := &vmValidator{
+				scCache:           fakeclients.StorageClassCache(clientset.StorageV1().StorageClasses),
+				backingImageCache: fakeclients.BackingImageCache(clientset.LonghornV1beta2().BackingImages),
+			}
+
+			got, err := v.getVMImageIDFromSC(scName)
+			if tc.expectError {
+				assert.Error(t, err, tc.name)
+			} else {
+				assert.NoError(t, err, tc.name)
+				assert.Equal(t, tc.expectedImageID, got, tc.name)
+			}
+		})
+	}
+}
+
+func TestVmValidator_Create(t *testing.T) {
+	// createVM has no network/MAC to avoid needing vmCache/nadCache setup
+	createVM := &kubevirtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"harvesterhci.io/volumeClaimTemplates": `[{"metadata":{"name":"test-disk-0",` +
+					`"annotations":{"harvesterhci.io/imageId":"default/image"}},` +
+					`"spec":{"accessModes":["ReadWriteMany"],"resources":{"requests":{"storage":"10Gi"}}` +
+					`,"volumeMode":"Block","storageClassName":"longhorn-image"}}]`,
+			},
+		},
+		Spec: kubevirtv1.VirtualMachineSpec{
+			Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{
+				Spec: kubevirtv1.VirtualMachineInstanceSpec{
+					Domain: kubevirtv1.DomainSpec{
+						Memory: &kubevirtv1.Memory{
+							Guest: resource.NewQuantity(1024*1024*1024, resource.BinarySI),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name                    string
+		vm                      *kubevirtv1.VirtualMachine
+		objMeta                 *metav1.ObjectMeta
+		sarDenied               bool
+		expectedValidationError bool
+	}{
+		{
+			name:                    "VM with annotation and SAR allowed - pass",
+			vm:                      createVM.DeepCopy(),
+			expectedValidationError: false,
+		},
+		{
+			name: "VM with no annotation - pass",
+			vm: &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{Name: createVM.Name, Namespace: createVM.Namespace},
+				Spec:       createVM.Spec,
+			},
+			expectedValidationError: false,
+		},
+		{
+			name:                    "VM with annotation and SAR denied - fail",
+			vm:                      createVM.DeepCopy(),
+			sarDenied:               true,
+			expectedValidationError: true,
+		},
+		{
+			name: "VM with bad JSON annotation - fail",
+			vm:   createVM.DeepCopy(),
+			objMeta: &metav1.ObjectMeta{
+				Name:      createVM.Name,
+				Namespace: createVM.Namespace,
+				Annotations: map[string]string{
+					"harvesterhci.io/volumeClaimTemplates": `[{"]`,
+				},
+			},
+			expectedValidationError: true,
+		},
+		{
+			name: "VM with invalid maintenance mode strategy - fail",
+			vm:   createVM.DeepCopy(),
+			objMeta: func() *metav1.ObjectMeta {
+				m := createVM.ObjectMeta.DeepCopy()
+				m.Labels = map[string]string{util.LabelMaintainModeStrategy: "foobar"}
+				return m
+			}(),
+			expectedValidationError: true,
+		},
+	}
+
+	allowedFakeSAR := fakeclients.AllowedSARClient()
+	denyFakeSAR := fakeclients.DeniedSARClient()
+
+	fakeRequest := fakeclients.NewFakeRequest("test-user")
+
+	corefakeclientset := corefake.NewClientset()
+	assert.NoError(t, corefakeclientset.Tracker().Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: createVM.Namespace}}))
+	fakeNSCache := fakeclients.NamespaceCache(corefakeclientset.CoreV1().Namespaces)
+
+	harvesterFakeClientset := fake.NewSimpleClientset()
+	// SC must be a Longhorn provisioner with a backingImage so checkVolumeClaimTemplateEntry
+	// resolves the backing image ID and reaches the SAR check.
+	assert.NoError(t, harvesterFakeClientset.Tracker().Add(&storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "longhorn-image"},
+		Provisioner: util.CSIProvisionerLonghorn,
+		Parameters:  map[string]string{util.LonghornOptionBackingImageName: "test-bi"},
+	}))
+	assert.NoError(t, harvesterFakeClientset.Tracker().Add(&longhorn.BackingImage{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-bi",
+			Namespace:   util.LonghornSystemNamespaceName,
+			Annotations: map[string]string{util.AnnotationImageID: "default/image"},
+		},
+	}))
+	fakeScCache := fakeclients.StorageClassCache(harvesterFakeClientset.StorageV1().StorageClasses)
+	fakeBICache := fakeclients.BackingImageCache(harvesterFakeClientset.LonghornV1beta2().BackingImages)
+
+	validator := NewValidator(fakeNSCache, nil, nil, nil, nil, nil, nil, nil, nil, nil, fakeScCache, nil, fakeBICache, nil).(*vmValidator)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vm := test.vm.DeepCopy()
+			if test.objMeta != nil {
+				vm.ObjectMeta = *test.objMeta
+			}
+			if test.sarDenied {
+				validator.sar = denyFakeSAR
+			} else {
+				validator.sar = allowedFakeSAR
+			}
+			err := validator.Create(fakeRequest, vm)
+			if test.expectedValidationError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}

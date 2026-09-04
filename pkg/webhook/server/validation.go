@@ -2,10 +2,10 @@ package server
 
 import (
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/rancher/wrangler/v3/pkg/webhook"
+	"k8s.io/client-go/transport"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ctlkubeovnv1 "github.com/harvester/harvester/pkg/generated/controllers/kubeovn.io/v1"
@@ -31,6 +31,7 @@ import (
 	"github.com/harvester/harvester/pkg/webhook/resources/supportbundle"
 	"github.com/harvester/harvester/pkg/webhook/resources/templateversion"
 	"github.com/harvester/harvester/pkg/webhook/resources/upgrade"
+	"github.com/harvester/harvester/pkg/webhook/resources/upgradelog"
 	"github.com/harvester/harvester/pkg/webhook/resources/version"
 	"github.com/harvester/harvester/pkg/webhook/resources/virtualmachine"
 	"github.com/harvester/harvester/pkg/webhook/resources/virtualmachinebackup"
@@ -43,11 +44,21 @@ import (
 )
 
 func Validation(clients *clients.Clients, options *config.Options, crdExists bool) (http.Handler, []types.Resource, error) {
-	bearToken, err := os.ReadFile(clients.RESTConfig.BearerTokenFile)
+	baseTransport, err := util.GetHTTPTransportWithCertificates(clients.RESTConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	transport, err := util.GetHTTPTransportWithCertificates(clients.RESTConfig)
+
+	// Wrap the transport so the service account token is periodically re-read
+	// from disk and injected as the bearer token. Under RKE2's CIS profile the
+	// projected SA token is bound with a short lifetime and rotated on disk, so
+	// a token read once at startup would expire (~1h) and cause kubelet calls
+	// to fail with HTTP 401.
+	kubeletTransport, err := transport.NewBearerAuthWithRefreshRoundTripper(
+		clients.RESTConfig.BearerToken,
+		clients.RESTConfig.BearerTokenFile,
+		baseTransport,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,14 +78,17 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 		node.NewValidator(
 			clients.Core.Node().Cache(),
 			clients.Batch.Job().Cache(),
-			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstance().Cache()),
+			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstance().Cache(),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Upgrade().Cache()),
 		persistentvolumeclaim.NewValidator(
 			clients.Core.PersistentVolumeClaim().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().KubeVirt().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineImage().Cache(),
 			clients.StorageFactory.Storage().V1().StorageClass().Cache(),
-			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache()),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache(),
+			clients.LonghornFactory.Longhorn().V1beta2().BackingImage().Cache(),
+			clients.K8s.AuthorizationV1().SubjectAccessReviews()),
 		volumeremotebackup.NewBackupValidator(
 			clients.Core.PersistentVolumeClaim().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VolumeRemoteBackup(),
@@ -105,15 +119,17 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.CNIFactory.K8s().V1().NetworkAttachmentDefinition().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().KubeVirt().Cache(),
 			clients.StorageFactory.Storage().V1().StorageClass().Cache(),
-			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache()),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache(),
+			clients.LonghornFactory.Longhorn().V1beta2().BackingImage().Cache(),
+			clients.K8s.AuthorizationV1().SubjectAccessReviews()),
 		virtualmachineimage.NewValidator(
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineImage().Cache(),
 			clients.Core.Pod().Cache(),
 			clients.Core.PersistentVolumeClaim().Cache(),
-			clients.K8s.AuthorizationV1().SelfSubjectAccessReviews(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineTemplateVersion().Cache(),
 			clients.StorageFactory.Storage().V1().StorageClass().Cache(),
-			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineBackup().Cache()),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineBackup().Cache(),
+			clients.K8s.AuthorizationV1().SubjectAccessReviews()),
 		upgrade.NewValidator(
 			clients.HarvesterFactory.Harvesterhci().V1beta1().Upgrade().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().Addon().Cache(),
@@ -126,13 +142,17 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineBackup().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().ScheduleVMBackup().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().Setting().Cache(),
+			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstance().Cache(),
-			clients.Core.Endpoints().Cache(),
+			clients.DiscoveryFactory.Discovery().V1().EndpointSlice().Cache(),
 			&http.Client{
-				Transport: transport,
+				Transport: kubeletTransport,
 				Timeout:   time.Second * 20,
 			},
-			string(bearToken),
+		),
+		upgradelog.NewValidator(
+			clients.HarvesterFactory.Harvesterhci().V1beta1().Upgrade().Cache(),
+			clients.HarvesterFactory.Harvesterhci().V1beta1().UpgradeLog().Cache(),
 		),
 		virtualmachinebackup.NewValidator(
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
@@ -140,6 +160,7 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineRestore().Cache(),
 			clients.CoreFactory.Core().V1().PersistentVolumeClaim().Cache(),
 			clients.LonghornFactory.Longhorn().V1beta2().Engine().Cache(),
+			clients.LonghornFactory.Longhorn().V1beta2().Volume().Cache(),
 			clients.StorageFactory.Storage().V1().StorageClass().Cache(),
 			clients.HarvesterFactory.Harvesterhci().V1beta1().ResourceQuota().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachineInstanceMigration().Cache(),
@@ -174,6 +195,7 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.HarvesterNetworkFactory.Network().V1beta1().VlanStatus().Cache(),
 			clients.LonghornFactory.Longhorn().V1beta2().Node().Cache(),
 			clients.Core.Secret().Cache(),
+			clients.CNIFactory.K8s().V1().NetworkAttachmentDefinition().Cache(),
 		),
 		templateversion.NewValidator(
 			clients.HarvesterFactory.Harvesterhci().V1beta1().VirtualMachineTemplate().Cache(),
@@ -205,6 +227,11 @@ func Validation(clients *clients.Clients, options *config.Options, crdExists boo
 			clients.Core.Node().Cache(),
 			clients.KubevirtFactory.Kubevirt().V1().VirtualMachine().Cache(),
 			kubeovnSubnetCache,
+			clients.StorageFactory.Storage().V1().StorageClass().Cache(),
+			clients.CoreFactory.Core().V1().PersistentVolumeClaim().Cache(),
+			clients.SnapshotFactory.Snapshot().V1().VolumeSnapshot().Cache(),
+			clients.SnapshotFactory.Snapshot().V1().VolumeSnapshotContent().Cache(),
+			clients.SnapshotFactory.Snapshot().V1().VolumeSnapshotClass().Cache(),
 			client,
 		),
 		version.NewValidator(),

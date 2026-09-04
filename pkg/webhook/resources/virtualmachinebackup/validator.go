@@ -3,20 +3,24 @@ package virtualmachinebackup
 import (
 	"fmt"
 
+	longhornv1beta2 "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 	ctlcorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 	ctlstoragev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/storage/v1"
 	admissionregv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 
 	"github.com/harvester/harvester/pkg/apis/harvesterhci.io/v1beta1"
-	"github.com/harvester/harvester/pkg/controller/master/backup"
+	"github.com/harvester/harvester/pkg/backup/common"
 	ctlharvesterv1 "github.com/harvester/harvester/pkg/generated/controllers/harvesterhci.io/v1beta1"
 	ctlkubevirtv1 "github.com/harvester/harvester/pkg/generated/controllers/kubevirt.io/v1"
 	ctllonghornv1 "github.com/harvester/harvester/pkg/generated/controllers/longhorn.io/v1beta2"
+	restorecommon "github.com/harvester/harvester/pkg/restore/common"
 	"github.com/harvester/harvester/pkg/settings"
 	"github.com/harvester/harvester/pkg/util"
+	vmutil "github.com/harvester/harvester/pkg/util/virtualmachine"
 	werror "github.com/harvester/harvester/pkg/webhook/error"
 	"github.com/harvester/harvester/pkg/webhook/indexeres"
 	"github.com/harvester/harvester/pkg/webhook/types"
@@ -24,8 +28,9 @@ import (
 )
 
 const (
-	fieldSourceName = "spec.source.name"
-	fieldTypeName   = "spec.type"
+	fieldSourceName       = "spec.source.name"
+	fieldTypeName         = "spec.type"
+	fieldFsFreezeDeadline = "spec.fsFreezeDeadline"
 )
 
 func NewValidator(
@@ -34,6 +39,7 @@ func NewValidator(
 	vmrestores ctlharvesterv1.VirtualMachineRestoreCache,
 	pvcCache ctlcorev1.PersistentVolumeClaimCache,
 	engineCache ctllonghornv1.EngineCache,
+	volumeCache ctllonghornv1.VolumeCache,
 	scCache ctlstoragev1.StorageClassCache,
 	resourceQuotaCache ctlharvesterv1.ResourceQuotaCache,
 	vmimCache ctlkubevirtv1.VirtualMachineInstanceMigrationCache,
@@ -44,9 +50,12 @@ func NewValidator(
 		vmrestores:         vmrestores,
 		pvcCache:           pvcCache,
 		engineCache:        engineCache,
+		volumeCache:        volumeCache,
 		scCache:            scCache,
 		resourceQuotaCache: resourceQuotaCache,
 		vmimCache:          vmimCache,
+		vmbr:               common.NewVMBackupReader(),
+		vmrr:               restorecommon.NewVMRestoreReader(),
 	}
 }
 
@@ -58,9 +67,12 @@ type virtualMachineBackupValidator struct {
 	vmrestores         ctlharvesterv1.VirtualMachineRestoreCache
 	pvcCache           ctlcorev1.PersistentVolumeClaimCache
 	engineCache        ctllonghornv1.EngineCache
+	volumeCache        ctllonghornv1.VolumeCache
 	scCache            ctlstoragev1.StorageClassCache
 	resourceQuotaCache ctlharvesterv1.ResourceQuotaCache
 	vmimCache          ctlkubevirtv1.VirtualMachineInstanceMigrationCache
+	vmbr               common.VMBackupReader
+	vmrr               restorecommon.VMRestoreReader
 }
 
 func (v *virtualMachineBackupValidator) Resource() types.Resource {
@@ -81,12 +93,17 @@ func (v *virtualMachineBackupValidator) Resource() types.Resource {
 func (v *virtualMachineBackupValidator) Create(_ *types.Request, newObj runtime.Object) error {
 	newVMBackup := newObj.(*v1beta1.VirtualMachineBackup)
 
-	if newVMBackup.Spec.Source.Name == "" {
+	sourceName := v.vmbr.GetSourceName(newVMBackup)
+	if sourceName == "" {
 		return werror.NewInvalidError("source VM name is empty", fieldSourceName)
 	}
 
+	if fsFreezeDeadline := v.vmbr.GetFsFreezeDeadline(newVMBackup); fsFreezeDeadline != nil && fsFreezeDeadline.Duration < 0 {
+		return werror.NewInvalidError("must not be negative", fieldFsFreezeDeadline)
+	}
+
 	validateFunc := v.validateStandardBackup
-	if !backup.IsBackupMissingStatus(newVMBackup) {
+	if !v.vmbr.IsMissingStatus(newVMBackup) {
 		validateFunc = v.validateVMBackupRecover
 	}
 
@@ -95,7 +112,7 @@ func (v *virtualMachineBackupValidator) Create(_ *types.Request, newObj runtime.
 		return err
 	}
 
-	if newVMBackup.Spec.Type == v1beta1.Snapshot {
+	if v.vmbr.GetType(newVMBackup) == v1beta1.Snapshot {
 		return nil
 	}
 
@@ -109,13 +126,21 @@ func (v *virtualMachineBackupValidator) Create(_ *types.Request, newObj runtime.
 
 func (v *virtualMachineBackupValidator) validateStandardBackup(vmb *v1beta1.VirtualMachineBackup) error {
 	// Retrieve the VM instance.
-	vm, err := v.vms.Get(vmb.Namespace, vmb.Spec.Source.Name)
+	spec := v.vmbr.GetSpec(vmb)
+	vm, err := v.vms.Get(vmb.Namespace, spec.Source.Name)
 	if err != nil {
 		return werror.NewInvalidError(err.Error(), fieldSourceName)
 	}
 	// Validate VM migration.
 	if err := v.checkVMInstanceMigration(vm); err != nil {
 		return werror.NewInvalidError(err.Error(), fieldSourceName)
+	}
+	// A shareable disk may be written by multiple VMs concurrently, so a
+	// backup or snapshot of it cannot be consistent.
+	if diskName, ok := vmutil.HasShareableDisk(vm); ok {
+		return werror.NewInvalidError(
+			fmt.Sprintf("cannot back up VM %s/%s: disk %s is shareable and may be written by multiple VMs concurrently", vm.Namespace, vm.Name, diskName),
+			fieldSourceName)
 	}
 	// Check the total snapshot size.
 	if err := v.checkTotalSnapshotSize(vm); err != nil {
@@ -130,11 +155,15 @@ func (v *virtualMachineBackupValidator) validateStandardBackup(vmb *v1beta1.Virt
 
 func (v *virtualMachineBackupValidator) validateVMBackupRecover(vmb *v1beta1.VirtualMachineBackup) error {
 	// Perform LH backup specific validation.
-	return webhookutil.IsLHBackupRelated(vmb)
+	return webhookutil.IsLHBackupRelated(vmb, v.vmbr)
 }
 
-// checkBackupVolumeSnapshotClass checks if the volumeSnapshotClassName is configured for the provisioner used by the PVCs in the VirtualMachine.
-func (v *virtualMachineBackupValidator) checkBackupVolumeSnapshotClass(vm *kubevirtv1.VirtualMachine, newVMBackup *v1beta1.VirtualMachineBackup) error {
+// checkBackupVolumeSnapshotClass checks if the volumeSnapshotClassName is
+// configured for the provisioner used by the PVCs in the VirtualMachine.
+func (v *virtualMachineBackupValidator) checkBackupVolumeSnapshotClass(
+	vm *kubevirtv1.VirtualMachine,
+	newVMBackup *v1beta1.VirtualMachineBackup,
+) error {
 	// Load the CSI driver configuration.
 	cdc, err := util.LoadCSIDriverConfig(v.setting)
 	if err != nil {
@@ -156,13 +185,36 @@ func (v *virtualMachineBackupValidator) checkBackupVolumeSnapshotClass(vm *kubev
 			return fmt.Errorf("failed to get PVC %s/%s: %w", pvcNamespace, pvcName, err)
 		}
 
-		// Validate both the ability and the CSI configuration.
-		if err := webhookutil.ValidateProvisionerAndConfig(pvc, v.engineCache, v.scCache, newVMBackup.Spec.Type, cdc); err != nil {
+		if err := v.checkLonghornV2Volume(vm, pvc); err != nil {
+			return err
+		}
+
+		if err := webhookutil.ValidateProvisionerAndConfig(pvc, v.scCache, v.vmbr.GetType(newVMBackup), cdc); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (v *virtualMachineBackupValidator) checkLonghornV2Volume(
+	vm *kubevirtv1.VirtualMachine,
+	pvc *corev1.PersistentVolumeClaim,
+) error {
+	if util.GetProvisionedPVCProvisioner(pvc, v.scCache) != util.CSIProvisionerLonghorn {
+		return nil
+	}
+
+	lhVolume, err := v.volumeCache.Get(util.LonghornSystemNamespaceName, pvc.Spec.VolumeName)
+	if err != nil {
+		return fmt.Errorf("failed to get Longhorn volume %s for PVC %s/%s: %w", pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+	}
+	if lhVolume.Spec.DataEngine != longhornv1beta2.DataEngineTypeV2 {
+		return nil
+	}
+
+	return fmt.Errorf("vm %s/%s contains Longhorn v2 volume %s from PVC %s/%s, which does not support VM backup",
+		vm.Namespace, vm.Name, lhVolume.Name, pvc.Namespace, pvc.Name)
 }
 
 func (v *virtualMachineBackupValidator) checkBackupTarget() error {
@@ -186,6 +238,12 @@ func (v *virtualMachineBackupValidator) Update(_ *types.Request, oldObj runtime.
 	newVMBackup := newObj.(*v1beta1.VirtualMachineBackup)
 	oldVMBackup := oldObj.(*v1beta1.VirtualMachineBackup)
 
+	// It's actually pretty useless, since this value is only used during
+	// creation, but for the sake of consistency, we'll check it here anyway.
+	if fsFreezeDeadline := v.vmbr.GetFsFreezeDeadline(newVMBackup); fsFreezeDeadline != nil && fsFreezeDeadline.Duration < 0 {
+		return werror.NewInvalidError("must not be negative", fieldFsFreezeDeadline)
+	}
+
 	oldAnnotations := oldVMBackup.GetAnnotations()
 	newAnnotations := newVMBackup.GetAnnotations()
 
@@ -197,18 +255,26 @@ func (v *virtualMachineBackupValidator) Update(_ *types.Request, oldObj runtime.
 }
 
 func (v *virtualMachineBackupValidator) Delete(_ *types.Request, obj runtime.Object) error {
-	vmBackup := obj.(*v1beta1.VirtualMachineBackup)
+	vb := obj.(*v1beta1.VirtualMachineBackup)
+	key := fmt.Sprintf("%s-%s", v.vmbr.GetNamespace(vb), v.vmbr.GetName(vb))
 
-	vmRestores, err := v.vmrestores.GetByIndex(indexeres.VMRestoreByVMBackupNamespaceAndName, fmt.Sprintf("%s-%s", vmBackup.Namespace, vmBackup.Name))
+	vmRestores, err := v.vmrestores.GetByIndex(indexeres.VMRestoreByVMBackupNamespaceAndName, key)
 	if err != nil {
-		return fmt.Errorf("can't get vmrestores from index %s with vmbackup %s/%s, err: %w", indexeres.VMRestoreByVMBackupNamespaceAndName, vmBackup.Namespace, vmBackup.Name, err)
+		return fmt.Errorf("list vmrestores for vmbackup %s: %w", key, err)
 	}
+
 	for _, vmRestore := range vmRestores {
-		if vmRestore.DeletionTimestamp != nil {
+		if v.vmrr.IsDeleting(vmRestore) || !v.vmrr.HasStatus(vmRestore) {
 			continue
 		}
-		if v1beta1.BackupConditionProgressing.IsTrue(vmRestore) {
-			return werror.NewBadRequest(fmt.Sprintf("vmrestore %s/%s is in progress", vmRestore.Namespace, vmRestore.Name))
+		if v.vmrr.IsFailed(vmRestore) {
+			continue
+		}
+
+		if v.vmrr.IsProgressing(vmRestore) {
+			restoreName := v.vmrr.GetName(vmRestore)
+			restoreNamespace := v.vmrr.GetNamespace(vmRestore)
+			return werror.NewBadRequest(fmt.Sprintf("vmrestore %s/%s is in progress", restoreNamespace, restoreName))
 		}
 	}
 	return nil
