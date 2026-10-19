@@ -324,3 +324,15 @@ func buildMockRKEControlPlane(name string, namespace string, conditions []generi
 		},
 	}
 }
+
+func TestLonghornReadyWhenDeferred(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	h := &ReadyzHandler{podCache: fakeclients.PodCache(clientset.CoreV1().Pods)}
+
+	ready, _ := h.longhornReady()
+	assert.False(t, ready, "no longhorn-manager pods and not deferred")
+
+	h.longhornDeferred = func() bool { return true }
+	ready, msg := h.longhornReady()
+	assert.True(t, ready, msg)
+}

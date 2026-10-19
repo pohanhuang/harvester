@@ -290,6 +290,15 @@ const (
 	StorageClassHarvesterLonghorn  = "harvester-longhorn"  // the initial & default storageclass
 	StorageClassLonghornStatic     = "longhorn-static"     // internal storageclass used for management of existing Longhorn volumes
 	StorageClassVmstatePersistence = "vmstate-persistence" // internal storageclass used for TPM and UEFI persistence
+	// StorageClassSystemRWO is the StorageClass contract used by Harvester
+	// system workloads that need ReadWriteOnce storage. When Longhorn is
+	// installed, Harvester creates this class. A deferred-Longhorn cluster
+	// requires the administrator to create a compatible third-party class.
+	StorageClassSystemRWO = "harvester-system-rwo"
+	// StorageClassUpgradeRWX is the StorageClass contract for the upgrade
+	// repository. It is reserved for a future upgrade workflow that supports
+	// third-party ReadWriteMany storage.
+	StorageClassUpgradeRWX = "harvester-upgrade-rwx"
 
 	HarvesterChartReleaseName = "harvester" // the release name
 

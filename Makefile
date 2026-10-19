@@ -108,6 +108,7 @@ DOCKER_BUILD = docker build $(MK_DOCKER_PULL) \
 	--build-arg RANCHER_PRIME_REGISTRY="$(MK_RANCHER_PRIME_REGISTRY)" \
 	--build-arg MONITORING_PRIME_REGISTRY="$(MK_MONITORING_REGISTRY)" \
 	--build-arg SUSE_STORAGE_REGISTRY="$(MK_SUSE_STORAGE_REGISTRY)" \
+	--build-arg UPGRADE_IMAGE_TAG="$(UPGRADE_IMAGE_TAG)" \
 	-f $(ROOT)/Dockerfile $(ROOT)
 
 .PHONY: build validate validate-ci validate-prime test test-integration build-iso \

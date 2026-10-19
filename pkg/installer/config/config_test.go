@@ -1333,3 +1333,33 @@ func TestInstall_IsDualStackEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldCreateDataPartitionOnOsDisk(t *testing.T) {
+	testCases := []struct {
+		name   string
+		cfg    HarvesterConfig
+		want   bool
+	}{
+		{
+			name: "default: creates partition on OS disk",
+			cfg:  HarvesterConfig{},
+			want: true,
+		},
+		{
+			name: "deferLonghornInstall: no partition created",
+			cfg:  HarvesterConfig{Install: Install{DeferLonghornInstall: true}},
+			want: false,
+		},
+		{
+			name: "witness role: no partition created",
+			cfg:  HarvesterConfig{Install: Install{Role: RoleWitness}},
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.cfg.ShouldCreateDataPartitionOnOsDisk())
+		})
+	}
+}

@@ -20,6 +20,58 @@ parameters:
 kind: StorageClass
 apiVersion: storage.k8s.io/v1
 metadata:
+  name: harvester-system-rwo
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: "{{ .Values.storageClass.reclaimPolicy }}"
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "{{ .Values.storageClass.replicaCount }}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  baseImage: ""
+  migratable: "true"
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: harvester-upgrade-rwx
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: "{{ .Values.storageClass.reclaimPolicy }}"
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "{{ .Values.storageClass.replicaCount }}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  baseImage: ""
+  migratable: "true"
+---
+{{- else }}
+{{- $provisioner := required "storageClass.system.provisioner is required when longhorn.enabled is false" .Values.storageClass.system.provisioner }}
+{{- $upgradeProvisioner := required "storageClass.upgrade.provisioner is required when longhorn.enabled is false" .Values.storageClass.upgrade.provisioner }}
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: harvester-system-rwo
+provisioner: {{ $provisioner | quote }}
+allowVolumeExpansion: true
+reclaimPolicy: "{{ .Values.storageClass.reclaimPolicy }}"
+volumeBindingMode: Immediate
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: harvester-upgrade-rwx
+provisioner: {{ $upgradeProvisioner | quote }}
+allowVolumeExpansion: true
+reclaimPolicy: "{{ .Values.storageClass.reclaimPolicy }}"
+volumeBindingMode: Immediate
+---
+{{- end }}
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
   name: vmstate-persistence
 provisioner: driver.longhorn.io
 allowVolumeExpansion: true
@@ -28,4 +80,4 @@ volumeBindingMode: Immediate
 parameters:
   numberOfReplicas: "{{ .Values.storageClass.replicaCount }}"
   staleReplicaTimeout: "30"
-{{- end -}}
+

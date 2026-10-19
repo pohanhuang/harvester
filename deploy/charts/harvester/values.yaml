@@ -225,7 +225,7 @@ cdi:
       featureGates:
         - HonorWaitForFirstConsumer
         - WebhookPvcRendering
-      scratchSpaceStorageClass: harvester-longhorn
+      scratchSpaceStorageClass: harvester-system-rwo
       podResourceRequirements:
         limits:
           memory: 2G
@@ -479,6 +479,14 @@ storageClass:
   defaultStorageClass: true
   reclaimPolicy: Delete
   replicaCount: 3
+  system:
+    # Required when longhorn.enabled is false. This is the CSI provisioner for
+    # the fixed harvester-system-rwo StorageClass used by Harvester system workloads.
+    provisioner: ""
+  upgrade:
+    # Required when longhorn.enabled is false. This is the CSI provisioner for
+    # the fixed harvester-upgrade-rwx StorageClass used by the upgrade repository.
+    provisioner: ""
 
 harvester-network-controller:
   ## Specify to install harvester network controller,

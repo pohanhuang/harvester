@@ -89,7 +89,7 @@ func (p *passwordWrapper) passwordConfirmVKeyEnter(_ *gocui.Gui, _ *gocui.View) 
 		return fmt.Errorf("%w: %s", err, out)
 	}
 	logrus.Infof("Default user password updated: %s", out)
-	return showDiskPage(p.c)
+	return showStoragePage(p.c)
 }
 
 func (p *passwordWrapper) passwordConfirmVKeyEscape(_ *gocui.Gui, _ *gocui.View) error {

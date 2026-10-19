@@ -19,12 +19,15 @@ import (
 type ReadyzHandler struct {
 	podCache ctlcorev1.PodCache
 	rkeCache generic.CacheInterface[*rkev1.RKEControlPlane]
+	// longhornDeferred reports whether Longhorn was not installed (deferLonghornInstall); nil means installed.
+	longhornDeferred func() bool
 }
 
-func NewReadyzHandler(podCache ctlcorev1.PodCache, rkeCache generic.CacheInterface[*rkev1.RKEControlPlane]) *ReadyzHandler {
+func NewReadyzHandler(podCache ctlcorev1.PodCache, rkeCache generic.CacheInterface[*rkev1.RKEControlPlane], longhornDeferred func() bool) *ReadyzHandler {
 	return &ReadyzHandler{
-		podCache: podCache,
-		rkeCache: rkeCache,
+		podCache:         podCache,
+		rkeCache:         rkeCache,
+		longhornDeferred: longhornDeferred,
 	}
 }
 
@@ -83,6 +86,9 @@ func (h *ReadyzHandler) rkeReady() (bool, string) {
 }
 
 func (h *ReadyzHandler) longhornReady() (bool, string) {
+	if h.longhornDeferred != nil && h.longhornDeferred() {
+		return true, ""
+	}
 	longhornManagerSelector := labels.SelectorFromSet(labels.Set(longhornTypes.GetManagerLabels()))
 	longhornPods, err := h.podCache.List(common.LonghornSystemNamespaceName, longhornManagerSelector)
 	if err != nil {

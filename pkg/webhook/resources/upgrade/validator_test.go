@@ -4,10 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	fleetv1alpha1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	mgmtv3type "github.com/rancher/rancher/pkg/apis/management.cattle.io/v3"
+	mgmtv3 "github.com/rancher/rancher/pkg/generated/controllers/management.cattle.io/v3"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
@@ -892,6 +897,44 @@ func TestUpgradeValidator_checkNodes_MaintenanceMode(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+type managedChartCacheStub struct {
+	mgmtv3.ManagedChartCache
+	chart *mgmtv3type.ManagedChart
+}
+
+func (s managedChartCacheStub) Get(namespace, name string) (*mgmtv3type.ManagedChart, error) {
+	if s.chart == nil {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "managedcharts"}, name)
+	}
+	return s.chart, nil
+}
+
+func TestUpgradeValidator_checkLonghornNotDeferred(t *testing.T) {
+	chart := func(longhorn map[string]interface{}) *mgmtv3type.ManagedChart {
+		return &mgmtv3type.ManagedChart{Spec: mgmtv3type.ManagedChartSpec{
+			Values: &fleetv1alpha1.GenericMap{Data: map[string]interface{}{"longhorn": longhorn}},
+		}}
+	}
+	tests := []struct {
+		name    string
+		chart   *mgmtv3type.ManagedChart
+		wantErr bool
+	}{
+		{"no managed chart", nil, false},
+		{"no values", &mgmtv3type.ManagedChart{}, false},
+		{"longhorn enabled", chart(map[string]interface{}{"enabled": true}), false},
+		{"longhorn key unset", chart(map[string]interface{}{}), false},
+		{"longhorn deferred", chart(map[string]interface{}{"enabled": false}), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &upgradeValidator{managedChartCache: managedChartCacheStub{chart: tc.chart}}
+			err := v.checkLonghornNotDeferred()
+			assert.Equal(t, tc.wantErr, err != nil)
 		})
 	}
 }

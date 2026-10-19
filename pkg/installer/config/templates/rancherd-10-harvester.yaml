@@ -133,9 +133,17 @@ resources:
           ip: "{{ .Vip }}"
           hwAddress: "{{ .VipHwAddr }}"
       {{- end }}
-      {{- if .Harvester.StorageClass.ReplicaCount }}
+      {{- if or .Harvester.StorageClass.ReplicaCount .Install.DeferLonghornInstall }}
       storageClass:
+        {{- if .Harvester.StorageClass.ReplicaCount }}
         replicaCount: {{ .Harvester.StorageClass.ReplicaCount }}
+        {{- end }}
+        {{- if .Install.DeferLonghornInstall }}
+        system:
+          provisioner: "{{ .Harvester.StorageClass.System.Provisioner }}"
+        upgrade:
+          provisioner: "{{ .Harvester.StorageClass.Upgrade.Provisioner }}"
+        {{- end }}
       {{- end }}
       {{- if .Harvester.EnableGoCoverDir }}
       enableGoCoverDir: true
@@ -151,8 +159,12 @@ resources:
           hciMode: true
       multus:
         enabled: false
+      cdi:
+        spec:
+          config:
+            scratchSpaceStorageClass: harvester-system-rwo
       longhorn:
-        enabled: true
+        enabled: {{ not .Install.DeferLonghornInstall }}
         defaultSettings:
           taintToleration: "kubevirt.io/drain:NoSchedule"
           defaultDataPath: "/var/lib/harvester/defaultdisk"

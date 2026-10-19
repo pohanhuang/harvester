@@ -47,6 +47,11 @@ var (
 	ErrMsgNoCredentials                = "no SSH authorized keys or passwords are set"
 	ErrMsgForceMBROnLargeDisk          = "disk size too large for MBR partitioning table"
 	ErrMsgForceMBROnUEFI               = "cannot force MBR on UEFI system"
+	ErrMsgDataDiskWithDeferredLonghorn = "install.dataDisk cannot be set when install.deferLonghornInstall is true"
+	ErrMsgSystemProvisionerRequired    = "harvester.storageClass.system.provisioner is required when install.deferLonghornInstall is true"
+	ErrMsgSystemProvisionerInvalid     = "harvester.storageClass.system.provisioner must be a valid CSI driver name"
+	ErrMsgUpgradeProvisionerRequired   = "harvester.storageClass.upgrade.provisioner is required when install.deferLonghornInstall is true"
+	ErrMsgUpgradeProvisionerInvalid    = "harvester.storageClass.upgrade.provisioner must be a valid CSI driver name"
 
 	ErrMsgNetworkMethodUnknown = "unknown network method"
 	ErrMsgVipModeUnknown       = "unknown vip mode"
@@ -444,6 +449,26 @@ func commonCheck(cfg *config.HarvesterConfig) error {
 
 	if len(cfg.SSHAuthorizedKeys) == 0 && cfg.Password == "" {
 		return errors.New(ErrMsgNoCredentials)
+	}
+
+	if cfg.Install.DeferLonghornInstall && cfg.Install.DataDisk != "" {
+		return errors.New(ErrMsgDataDiskWithDeferredLonghorn)
+	}
+	if cfg.Install.DeferLonghornInstall {
+		provisioner := cfg.Harvester.StorageClass.System.Provisioner
+		if provisioner == "" {
+			return errors.New(ErrMsgSystemProvisionerRequired)
+		}
+		if errs := validation.IsDNS1123Subdomain(provisioner); len(errs) > 0 {
+			return errors.New(ErrMsgSystemProvisionerInvalid)
+		}
+		upgradeProvisioner := cfg.Harvester.StorageClass.Upgrade.Provisioner
+		if upgradeProvisioner == "" {
+			return errors.New(ErrMsgUpgradeProvisionerRequired)
+		}
+		if errs := validation.IsDNS1123Subdomain(upgradeProvisioner); len(errs) > 0 {
+			return errors.New(ErrMsgUpgradeProvisionerInvalid)
+		}
 	}
 
 	if cfg.Install.Cordoned {

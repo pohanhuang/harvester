@@ -17,6 +17,7 @@ import (
 
 	"github.com/harvester/harvester/pkg/api/backuptarget"
 	"github.com/harvester/harvester/pkg/api/forkliftproxy"
+	"github.com/harvester/harvester/pkg/api/installprofile"
 	"github.com/harvester/harvester/pkg/api/kubeconfig"
 	"github.com/harvester/harvester/pkg/api/proxy"
 	"github.com/harvester/harvester/pkg/api/readyz"
@@ -26,6 +27,7 @@ import (
 	harvesterServer "github.com/harvester/harvester/pkg/server/http"
 	"github.com/harvester/harvester/pkg/server/ui"
 	"github.com/harvester/harvester/pkg/util"
+	utilinstallprofile "github.com/harvester/harvester/pkg/util/installprofile"
 	ctlcorev1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/core/v1"
 )
 
@@ -79,6 +81,19 @@ func (r *Router) Routes(h router.Handlers) http.Handler {
 
 	uiInfoHandler := harvesterServer.NewHandler(uiinfo.NewUIInfoHandler(r.scaled, r.options))
 	m.Path("/v1/harvester/ui-info").Methods("GET").Handler(uiInfoHandler)
+	// Served to a joining node before it has any credentials; authenticated by the join token itself.
+	secretCache := r.scaled.CoreFactory.Core().V1().Secret().Cache()
+	configMapCache := r.scaled.CoreFactory.Core().V1().ConfigMap().Cache()
+	getProfileData := func() (map[string]string, error) {
+		cm, err := configMapCache.Get(util.HarvesterSystemNamespaceName, utilinstallprofile.ConfigMapName)
+		if err != nil {
+			return nil, err
+		}
+		return cm.Data, nil
+	}
+	m.Path(utilinstallprofile.Path).Methods("GET").Handler(installprofile.New(
+		func() (string, error) { return getTokenFromSecret(secretCache) },
+		getProfileData))
 	m.PathPrefix("/v1/harvester/plugin-assets").Handler(ui.Vue.PluginServeAsset())
 
 	sbDownloadHandler := harvesterServer.NewHandler(supportbundle.NewDownloadHandler(r.scaled, r.options.Namespace))
@@ -89,7 +104,11 @@ func (r *Router) Routes(h router.Handlers) http.Handler {
 
 	readyzHandlerv1 := harvesterServer.NewHandler(readyz.NewReadyzHandler(
 		r.scaled.CoreFactory.Core().V1().Pod().Cache(),
-		r.scaled.Management.RKEFactory.Rke().V1().RKEControlPlane().Cache()))
+		r.scaled.Management.RKEFactory.Rke().V1().RKEControlPlane().Cache(),
+		func() bool {
+			data, err := getProfileData()
+			return err == nil && data[utilinstallprofile.DeferLonghornInstallKey] == "true"
+		}))
 	m.Path("/v1/harvester/readyz").Methods("GET").Handler(authMiddleware(r.scaled.CoreFactory.Core().V1().Secret().Cache(), readyzHandlerv1))
 
 	// --- END of preposition routes ---

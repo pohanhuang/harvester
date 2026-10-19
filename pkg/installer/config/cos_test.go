@@ -429,3 +429,43 @@ func TestDisableLonghornMultipathing_DirectoryIsTraversable(t *testing.T) {
 	}
 	t.Fatal("expected /etc/multipath/conf.d in the stage directories")
 }
+
+func TestLonghornInstallRendersSystemStorageContract(t *testing.T) {
+	testCases := []struct {
+		name                 string
+		deferLonghornInstall bool
+		longhornEnabled      string
+		provisioner          string
+		upgradeProvisioner   string
+	}{
+		{
+			name:            "default installation enables Longhorn",
+			longhornEnabled: "enabled: true",
+		},
+		{
+			name:                 "deferred installation disables Longhorn",
+			deferLonghornInstall: true,
+			longhornEnabled:      "enabled: false",
+			provisioner:          "example.csi.vendor",
+			upgradeProvisioner:   "example.csi.vendor",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			conf, err := LoadHarvesterConfig(util.LoadFixture(t, "harvester-config.yaml"))
+			assert.NoError(t, err)
+			conf.Install.DeferLonghornInstall = tc.deferLonghornInstall
+			conf.Harvester.StorageClass.System.Provisioner = tc.provisioner
+			conf.Harvester.StorageClass.Upgrade.Provisioner = tc.upgradeProvisioner
+
+			harvesterYaml, err := render("rancherd-10-harvester.yaml", conf)
+			assert.NoError(t, err)
+			assert.Contains(t, harvesterYaml, tc.longhornEnabled)
+			assert.Contains(t, harvesterYaml, "scratchSpaceStorageClass: harvester-system-rwo")
+			if tc.deferLonghornInstall {
+				assert.Contains(t, harvesterYaml, "provisioner: \"example.csi.vendor\"")
+			}
+		})
+	}
+}

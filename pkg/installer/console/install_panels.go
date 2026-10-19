@@ -31,6 +31,7 @@ type UserInputData struct {
 	DNSServers           string
 	NTPServers           string
 	HasCheckedNTPServers bool
+	InstallProfileNotice string
 }
 
 type IPMask = net.IPMask
@@ -166,6 +167,8 @@ func setPanels(c *Console) error {
 		addPreflightCheckPanel,
 		addAskCreatePanel,
 		addAskRolePanel,
+		addAskDeferLonghornPanel,
+		addProvisionerPanels,
 		addDiskPanel,
 		addHostnamePanel,
 		addNetworkPanel,
@@ -252,7 +255,8 @@ func showDiskPage(c *Console) error {
 
 	nextComponents := []string{diskPanel}
 	if c.config.Install.Role != config.RoleWitness &&
-		len(diskOptions) > 1 {
+		len(diskOptions) > 1 &&
+		!c.config.Install.DeferLonghornInstall {
 		nextComponents = append([]string{dataDiskPanel}, nextComponents...)
 	}
 
@@ -277,7 +281,7 @@ func calculateDefaultPersistentSize(dev string) (string, error) {
 }
 
 func presetConfigDisks(c *Console, diskOpts []widgets.Option) {
-	if c.config.Install.Device != "" && c.config.Install.DataDisk != "" {
+	if c.config.Install.Device != "" && (c.config.Install.DataDisk != "" || c.config.Install.DeferLonghornInstall) {
 		return
 	}
 	if len(diskOpts) == 0 {
@@ -287,7 +291,7 @@ func presetConfigDisks(c *Console, diskOpts []widgets.Option) {
 	if c.config.Install.Device == "" {
 		c.config.Install.Device = diskOpts[0].Value
 	}
-	if c.config.Install.DataDisk == "" {
+	if c.config.Install.DataDisk == "" && !c.config.Install.DeferLonghornInstall {
 		c.config.Install.DataDisk = c.config.Install.Device
 	}
 }
@@ -318,6 +322,9 @@ func addDiskPanel(c *Console) error {
 	gotoPrevPage := func(_ *gocui.Gui, _ *gocui.View) error {
 		closeThisPage()
 		diskConfirmed = false
+		if c.config.Install.Mode == config.ModeCreate {
+			return showNext(c, askDeferLonghornPanel)
+		}
 		return showPasswordPage(c)
 	}
 
@@ -485,6 +492,9 @@ func addDiskPanel(c *Console) error {
 			return err
 		}
 
+		if c.config.Install.DeferLonghornInstall {
+			c.config.Install.DataDisk = ""
+		}
 		if c.config.Install.Role == config.RoleWitness {
 			c.config.Install.DataDisk = ""
 			if err := dataDiskV.SetData(""); err != nil {
@@ -543,7 +553,7 @@ func addDiskPanel(c *Console) error {
 		c.config.Install.Device = device
 
 		diskOpts := diskOptionsCache.getAllValidDiskOptions()
-		if len(diskOpts) > 1 {
+		if len(diskOpts) > 1 && !c.config.Install.DeferLonghornInstall {
 			// Show error if disk size validation fails, but allow proceeding to next field
 			if _, err := validateAllDiskSizes(); err != nil {
 				return err
@@ -1281,6 +1291,11 @@ func addTokenPanel(c *Console) error {
 			}
 			if err := checkToken(token); err != nil {
 				return c.setContentByName(validatorPanel, err.Error())
+			}
+			if c.config.Install.Mode == config.ModeJoin {
+				if err := syncInstallProfile(c, token); err != nil {
+					return c.setContentByName(validatorPanel, err.Error())
+				}
 			}
 			c.config.Token = token
 			if err := closeThisPage(); err != nil {
@@ -2551,6 +2566,13 @@ func addConfirmInstallPanel(c *Console) error {
 			options += "disable SSH password auth: yes\n"
 		}
 		options += string(installBytes)
+		if c.config.Install.DeferLonghornInstall {
+			sc := c.config.Harvester.StorageClass
+			options += fmt.Sprintf("system provisioner: %v\nupgrade provisioner: %v\n", sc.System.Provisioner, sc.Upgrade.Provisioner)
+		}
+		if userInputData.InstallProfileNotice != "" {
+			options += "\nNOTICE: " + userInputData.InstallProfileNotice + "\n"
+		}
 		logrus.Debug("cfm cfg: ", fmt.Sprintf("%+v", c.config.Install))
 		if !c.config.Install.Silent {
 			if alreadyInstalled {

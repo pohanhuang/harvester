@@ -183,6 +183,61 @@ func TestValidateConfig(t *testing.T) {
 				c.Install.Role = config.RoleWorker
 			},
 		},
+		{
+			name: "invalid create config: dataDisk set with deferLonghornInstall",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+				c.Install.DataDisk = "/dev/vdb"
+			},
+			errMsg: ErrMsgDataDiskWithDeferredLonghorn,
+		},
+		{
+			name: "invalid create config: deferred Longhorn without a system provisioner",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+			},
+			errMsg: ErrMsgSystemProvisionerRequired,
+		},
+		{
+			name: "invalid create config: deferred Longhorn without an upgrade provisioner",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+				c.Harvester.StorageClass.System.Provisioner = "example.csi.vendor"
+			},
+			errMsg: ErrMsgUpgradeProvisionerRequired,
+		},
+		{
+			name: "invalid create config: deferred Longhorn with an invalid system provisioner",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+				c.Harvester.StorageClass.System.Provisioner = "Invalid CSI Driver"
+				c.Harvester.StorageClass.Upgrade.Provisioner = "example.csi.vendor"
+			},
+			errMsg: ErrMsgSystemProvisionerInvalid,
+		},
+		{
+			name: "invalid create config: deferred Longhorn with an invalid upgrade provisioner",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+				c.Harvester.StorageClass.System.Provisioner = "example.csi.vendor"
+				c.Harvester.StorageClass.Upgrade.Provisioner = "Invalid CSI Driver"
+			},
+			errMsg: ErrMsgUpgradeProvisionerInvalid,
+		},
+		{
+			name: "valid create config: deferred Longhorn with a system provisioner",
+			cfg:  createCreateConfig(),
+			preApply: func(c *config.HarvesterConfig) {
+				c.Install.DeferLonghornInstall = true
+				c.Harvester.StorageClass.System.Provisioner = "example.csi.vendor"
+				c.Harvester.StorageClass.Upgrade.Provisioner = "example.csi.vendor"
+			},
+		},
 	}
 
 	for _, testCase := range testCases {

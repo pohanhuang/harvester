@@ -170,6 +170,11 @@ func (v *upgradeValidator) Create(_ *types.Request, newObj runtime.Object) error
 		return werror.NewConflict(msg[:len(msg)-1])
 	}
 
+	// Not skippable: the upgrade workflow needs Longhorn-backed RWX storage.
+	if err := v.checkLonghornNotDeferred(); err != nil {
+		return err
+	}
+
 	if newUpgrade.Annotations != nil {
 		if skipWebhook, ok := newUpgrade.Annotations[skipWebhookAnnotation]; ok && strings.ToLower(skipWebhook) == "true" {
 			return nil
@@ -330,6 +335,24 @@ func (v *upgradeValidator) checkManagedCharts() error {
 		}
 	}
 
+	return nil
+}
+
+// checkLonghornNotDeferred rejects upgrades of a cluster installed with deferLonghornInstall.
+func (v *upgradeValidator) checkLonghornNotDeferred() error {
+	mc, err := v.managedChartCache.Get(managedChartNamespace, util.HarvesterChartReleaseName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return werror.NewInternalError(fmt.Sprintf("can't get managed chart %s, err: %+v", util.HarvesterChartReleaseName, err))
+	}
+	if mc.Spec.Values == nil {
+		return nil
+	}
+	if lh, ok := mc.Spec.Values.Data["longhorn"].(map[string]interface{}); ok && lh["enabled"] == false {
+		return werror.NewBadRequest("upgrade is not supported when Longhorn installation was deferred (install.deferLonghornInstall)")
+	}
 	return nil
 }
 

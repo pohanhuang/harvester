@@ -489,6 +489,89 @@ func Test_validateUpdatedAddon(t *testing.T) {
 	}
 }
 
+func TestValidateStorageDependentAddon(t *testing.T) {
+	monitoringValues := `
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: harvester-system-rwo
+grafana:
+  persistence:
+    storageClassName: harvester-system-rwo
+prometheus:
+  prometheusSpec:
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: harvester-system-rwo
+`
+	k3kValues := `
+k3kCluster:
+  storageClassName: harvester-system-rwo
+`
+
+	testCases := []struct {
+		name          string
+		addon         *harvesterv1.Addon
+		storageClass  *storagev1.StorageClass
+		expectedError string
+	}{
+		{
+			name: "reject monitoring when its storage class does not exist",
+			addon: &harvesterv1.Addon{
+				ObjectMeta: metav1.ObjectMeta{Name: util.RancherMonitoringName},
+				Spec:       harvesterv1.AddonSpec{ValuesContent: monitoringValues},
+			},
+			expectedError: `requires StorageClass "harvester-system-rwo" to exist`,
+		},
+		{
+			name: "accept monitoring when its storage class exists",
+			addon: &harvesterv1.Addon{
+				ObjectMeta: metav1.ObjectMeta{Name: util.RancherMonitoringName},
+				Spec:       harvesterv1.AddonSpec{ValuesContent: monitoringValues},
+			},
+			storageClass: &storagev1.StorageClass{
+				ObjectMeta:  metav1.ObjectMeta{Name: util.StorageClassSystemRWO},
+				Provisioner: "example.csi.vendor",
+			},
+		},
+		{
+			name: "reject k3k when its storage class has no provisioner",
+			addon: &harvesterv1.Addon{
+				ObjectMeta: metav1.ObjectMeta{Name: k3kAddonName},
+				Spec:       harvesterv1.AddonSpec{ValuesContent: k3kValues},
+			},
+			storageClass: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{Name: util.StorageClassSystemRWO},
+			},
+			expectedError: `requires StorageClass "harvester-system-rwo" to have a provisioner`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			clientset := fake.NewSimpleClientset()
+			if tc.storageClass != nil {
+				_, err := clientset.StorageV1().StorageClasses().Create(t.Context(), tc.storageClass, metav1.CreateOptions{})
+				require.NoError(t, err)
+			}
+			validator := &addonValidator{
+				storageClassCache: fakeclients.StorageClassCache(clientset.StorageV1().StorageClasses),
+			}
+
+			err := validator.validateStorageDependentAddon(tc.addon)
+			if tc.expectedError == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.expectedError)
+		})
+	}
+}
+
 func Test_validateNewAddon(t *testing.T) {
 	var testCases = []struct {
 		name          string

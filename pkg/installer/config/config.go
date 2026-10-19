@@ -145,7 +145,21 @@ type LonghornChartValues struct {
 
 type StorageClass struct {
 	// 0 is invalid, will be omitted
-	ReplicaCount uint32 `json:"replicaCount,omitempty"`
+	ReplicaCount uint32              `json:"replicaCount,omitempty"`
+	System       SystemStorageClass  `json:"system,omitempty"`
+	Upgrade      UpgradeStorageClass `json:"upgrade,omitempty"`
+}
+
+// SystemStorageClass configures the fixed StorageClass used by Harvester
+// system workloads when Longhorn installation is deferred.
+type SystemStorageClass struct {
+	Provisioner string `json:"provisioner,omitempty"`
+}
+
+// UpgradeStorageClass configures the fixed StorageClass used by the upgrade
+// repository when Longhorn installation is deferred.
+type UpgradeStorageClass struct {
+	Provisioner string `json:"provisioner,omitempty"`
 }
 
 type HarvesterChartValues struct {
@@ -193,6 +207,9 @@ type Install struct {
 	// Following options are not cOS installer flag
 	ForceMBR bool   `json:"forceMbr,omitempty"`
 	DataDisk string `json:"dataDisk,omitempty"`
+
+	// Fresh installation without a default Longhorn deployment
+	DeferLonghornInstall bool `json:"deferLonghornInstall,omitempty"`
 
 	Webhooks                []Webhook            `json:"webhooks,omitempty"`
 	Addons                  map[string]Addon     `json:"addons,omitempty"`
@@ -366,7 +383,12 @@ type HarvesterConfig struct {
 }
 
 func NewHarvesterConfig() *HarvesterConfig {
-	return &HarvesterConfig{}
+	// shortcut: hardcoded for dev testing, remove before merge
+	return &HarvesterConfig{
+		Install: Install{
+			DeferLonghornInstall: true,
+		},
+	}
 }
 
 func (c *HarvesterConfig) DeepCopy() (*HarvesterConfig, error) {
@@ -416,7 +438,7 @@ func (c *HarvesterConfig) GetKubeletArgs() ([]string, error) {
 		labelStrs = append(labelStrs, fmt.Sprintf("%s=%s", labelName, labelValue))
 	}
 
-	var args = []string{
+	args := []string{
 		fmt.Sprintf("max-pods=%d", MaxPods),
 	}
 
@@ -444,6 +466,9 @@ func (c *HarvesterConfig) GetKubeReserved() string {
 }
 
 func (c HarvesterConfig) ShouldCreateDataPartitionOnOsDisk() bool {
+	if c.Install.DeferLonghornInstall {
+		return false
+	}
 	// Witness nodes don't need a data partition
 	if c.Install.Role == RoleWitness {
 		return false
@@ -454,6 +479,9 @@ func (c HarvesterConfig) ShouldCreateDataPartitionOnOsDisk() bool {
 }
 
 func (c HarvesterConfig) ShouldMountDataPartition() bool {
+	if c.Install.DeferLonghornInstall {
+		return false
+	}
 	// Witness nodes don't need a data partition
 	if c.Install.Role == RoleWitness {
 		return false
@@ -517,7 +545,6 @@ func (n *NetworkInterface) FindNetworkInterfaceName() error {
 
 	// Default, there is no Name or HwAddress, do nothing. Let validation capture it
 	return nil
-
 }
 
 // FindNetworkInterfaceHwAddr uses device name to lookup hardware address
@@ -547,7 +574,6 @@ func (n *NetworkInterface) FindNetworkInterfaceHwAddr() error {
 }
 
 func GenerateRancherdConfig(config *HarvesterConfig) (*yipSchema.YipConfig, error) {
-
 	runtimeConfig := yipSchema.Stage{
 		Users:            make(map[string]yipSchema.User),
 		TimeSyncd:        make(map[string]string),

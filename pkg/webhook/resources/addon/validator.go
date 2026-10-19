@@ -45,6 +45,7 @@ const (
 	vCluster0190           = "v0.19.0"
 	vCluster0300           = "v0.30.0"
 	kubeOVNOperatorAddon   = util.KubeOVNOperatorName
+	k3kAddonName           = "rancher-k3k"
 
 	labelParentSRIOVGPUDevice = "harvesterhci.io/parentSRIOVGPUDevice"
 )
@@ -162,6 +163,10 @@ func (v *addonValidator) validateNewAddon(newAddon *v1beta1.Addon) error {
 		}
 	}
 
+	if newAddon.Spec.Enabled {
+		return v.validateStorageDependentAddon(newAddon)
+	}
+
 	return nil
 }
 
@@ -173,6 +178,12 @@ func (v *addonValidator) validateUpdatedAddon(newAddon *v1beta1.Addon, oldAddon 
 
 	if v1beta1.AddonOperationInProgress.IsTrue(oldAddon) {
 		return werror.NewBadRequest(fmt.Sprintf("cannot perform operation, as an existing operation is in progress on addon %s", oldAddon.Name))
+	}
+
+	if newAddon.Spec.Enabled && (!oldAddon.Spec.Enabled || newAddon.Spec.ValuesContent != oldAddon.Spec.ValuesContent) {
+		if err := v.validateStorageDependentAddon(newAddon); err != nil {
+			return err
+		}
 	}
 
 	switch newAddon.Name {
@@ -193,6 +204,91 @@ func (v *addonValidator) validateUpdatedAddon(newAddon *v1beta1.Addon, oldAddon 
 	}
 
 	return nil
+}
+
+// validateStorageDependentAddon prevents Helm from creating PVCs that can
+// never bind because their referenced StorageClass is missing. The addon
+// values remain the source of truth, so administrators can use another
+// third-party StorageClass only when it already exists in the cluster.
+func (v *addonValidator) validateStorageDependentAddon(addon *v1beta1.Addon) error {
+	storageClasses, err := storageClassesForAddon(addon)
+	if err != nil {
+		return err
+	}
+
+	for _, storageClassName := range storageClasses {
+		if storageClassName == "" {
+			return werror.NewBadRequest(fmt.Sprintf("%s addon requires a storageClassName before it can be enabled", addon.Name))
+		}
+
+		storageClass, err := v.storageClassCache.Get(storageClassName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return werror.NewBadRequest(fmt.Sprintf("%s addon requires StorageClass %q to exist before it can be enabled", addon.Name, storageClassName))
+			}
+			return werror.NewInternalError(fmt.Sprintf("cannot get StorageClass %q for %s addon: %v", storageClassName, addon.Name, err))
+		}
+		if strings.TrimSpace(storageClass.Provisioner) == "" {
+			return werror.NewBadRequest(fmt.Sprintf("%s addon requires StorageClass %q to have a provisioner", addon.Name, storageClassName))
+		}
+	}
+
+	return nil
+}
+
+func storageClassesForAddon(addon *v1beta1.Addon) ([]string, error) {
+	switch addon.Name {
+	case util.RancherMonitoringName:
+		var values struct {
+			Alertmanager struct {
+				AlertmanagerSpec struct {
+					Storage struct {
+						VolumeClaimTemplate struct {
+							Spec struct {
+								StorageClassName string `yaml:"storageClassName"`
+							} `yaml:"spec"`
+						} `yaml:"volumeClaimTemplate"`
+					} `yaml:"storage"`
+				} `yaml:"alertmanagerSpec"`
+			} `yaml:"alertmanager"`
+			Grafana struct {
+				Persistence struct {
+					StorageClassName string `yaml:"storageClassName"`
+				} `yaml:"persistence"`
+			} `yaml:"grafana"`
+			Prometheus struct {
+				PrometheusSpec struct {
+					StorageSpec struct {
+						VolumeClaimTemplate struct {
+							Spec struct {
+								StorageClassName string `yaml:"storageClassName"`
+							} `yaml:"spec"`
+						} `yaml:"volumeClaimTemplate"`
+					} `yaml:"storageSpec"`
+				} `yaml:"prometheusSpec"`
+			} `yaml:"prometheus"`
+		}
+		if err := yaml.Unmarshal([]byte(addon.Spec.ValuesContent), &values); err != nil {
+			return nil, werror.NewBadRequest(fmt.Sprintf("unable to parse valuesContent for %s addon: %v", addon.Name, err))
+		}
+		return []string{
+			values.Alertmanager.AlertmanagerSpec.Storage.VolumeClaimTemplate.Spec.StorageClassName,
+			values.Grafana.Persistence.StorageClassName,
+			values.Prometheus.PrometheusSpec.StorageSpec.VolumeClaimTemplate.Spec.StorageClassName,
+		}, nil
+	case k3kAddonName:
+		var values struct {
+			K3KCluster struct {
+				StorageClassName string `yaml:"storageClassName"`
+			} `yaml:"k3kCluster"`
+		}
+		if err := yaml.Unmarshal([]byte(addon.Spec.ValuesContent), &values); err != nil {
+			return nil, werror.NewBadRequest(fmt.Sprintf("unable to parse valuesContent for %s addon: %v", addon.Name, err))
+		}
+		return []string{values.K3KCluster.StorageClassName}, nil
+	default:
+		return nil, nil
+	}
 }
 
 func (v *addonValidator) validateVClusterAddonUpdate(newAddon *v1beta1.Addon, oldAddon *v1beta1.Addon) error {

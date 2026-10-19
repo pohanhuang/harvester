@@ -1,0 +1,15 @@
+{{- /* Write-once: an existing ConfigMap keeps its value, so upgrades never change the install-time decision. */ -}}
+{{- $existing := lookup "v1" "ConfigMap" .Release.Namespace "harvester-install-profile" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: harvester-install-profile
+  labels:
+{{ include "harvester.labels" . | indent 4 }}
+immutable: true
+data:
+  {{- if $existing }}
+  deferLonghornInstall: {{ index $existing.data "deferLonghornInstall" | quote }}
+  {{- else }}
+  deferLonghornInstall: {{ not .Values.longhorn.enabled | quote }}
+  {{- end }}
