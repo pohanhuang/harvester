@@ -416,6 +416,9 @@ func (r *Repo) CreateDeployment(vmImage *harvesterv1.VirtualMachineImage) (*apps
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RecreateDeploymentStrategyType,
+			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					harvesterUpgradeLabel:          r.upgrade.Name,
@@ -542,13 +545,7 @@ func (r *Repo) getDeploymentReplicaCount() (*int32, error) {
 	if len(nonWitnessNodes) == 0 {
 		return nil, errors.New("no non-witness nodes found in the cluster")
 	}
-
-	var replicas int32
-	if len(nonWitnessNodes) == 1 {
-		replicas = 1
-	} else {
-		replicas = 2
-	}
+	replicas := int32(1)
 
 	return &replicas, nil
 }
