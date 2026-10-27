@@ -125,7 +125,7 @@ func generateDVTargetStorage(vmi *harvesterv1.VirtualMachineImage) (*cdiv1.Stora
 	// for upgrade repo deployment usage, we need to create RWX filesystem data volume
 	// so that it can be mounted to multiple pods.
 	if vmi.Annotations != nil && vmi.Annotations[util.AnnotationUpgradeImage] == "True" {
-		targetDVStorage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+		targetDVStorage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 		volumeMode := corev1.PersistentVolumeFilesystem
 		targetDVStorage.VolumeMode = &volumeMode
 	}
