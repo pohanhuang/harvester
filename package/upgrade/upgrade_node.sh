@@ -84,17 +84,16 @@ clean_up_tmp_files()
     umount $tmp_rootfs_mount || echo "Umount $tmp_rootfs_mount failed with return code: $?"
   fi
   echo "Clean up tmp files..."
-  if [ -n "$NEW_OS_SQUASHFS_IMAGE_FILE" ]; then
+  # Keep the files staged in prepare, a retried job needs them because the repo
+  # may not be reachable once this node is drained. upgrade_os removes them
+  # after a successful upgrade.
+  if [ -n "$NEW_OS_SQUASHFS_IMAGE_FILE" ] && [ "$NEW_OS_SQUASHFS_IMAGE_FILE" != "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
     echo "Try to remove $NEW_OS_SQUASHFS_IMAGE_FILE..."
     rm -vf "$NEW_OS_SQUASHFS_IMAGE_FILE"
   fi
-  if [ -n "$tmp_rootfs_squashfs" ]; then
+  if [ -n "$tmp_rootfs_squashfs" ] && [ "$tmp_rootfs_squashfs" != "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
     echo "Try to remove $tmp_rootfs_squashfs..."
     rm -vf "$tmp_rootfs_squashfs"
-  fi
-  if [ -f "$UPGRADE_REPO_CACHED_RELEASE_FILE" ]; then
-    echo "Try to remove $UPGRADE_REPO_CACHED_RELEASE_FILE..."
-    rm -vf "$UPGRADE_REPO_CACHED_RELEASE_FILE"
   fi
 
   if is_mounted "/run/cos/state"; then
@@ -296,6 +295,10 @@ command_prepare()
   detect_upgrade
   check_version
   preload_images
+
+  # The controller stops the repo before node upgrades, so stage everything
+  # needed by post-drain on the host now.
+  stage_upgrade_repo
 }
 
 stage_upgrade_repo()
@@ -323,12 +326,21 @@ stage_upgrade_repo()
 load_staged_upgrade_repo()
 {
   if [ ! -s "$UPGRADE_REPO_CACHED_RELEASE_FILE" ] || [ ! -s "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
-    echo "[ERROR] Upgrade repo files were not staged during pre-drain."
+    echo "Upgrade repo files were not staged on this host."
     return 1
   fi
 
   load_repo_release "$UPGRADE_REPO_CACHED_RELEASE_FILE"
   NEW_OS_SQUASHFS_IMAGE_FILE=$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE
+}
+
+# Start the repo to stage the files again, then stop it so it doesn't block
+# draining nodes.
+restage_upgrade_repo()
+{
+  scale_repo_deployment 1
+  stage_upgrade_repo
+  scale_repo_deployment 0
 }
 
 wait_evacuation_pdb_gone()
@@ -402,11 +414,13 @@ wait_longhorn_engines() {
 }
 
 command_pre_drain() {
-  # The repo can be unavailable after this node is drained when it uses RWO
-  # storage. Stage everything needed by post-drain on the host first.
-  stage_upgrade_repo
-
   recover_rancher_system_agent
+
+  # Last chance to fetch from the repo: if its volume has a single replica on
+  # this node, the repo can't be started again until this node is back.
+  if [ ! -s "$UPGRADE_REPO_CACHED_RELEASE_FILE" ] || [ ! -s "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
+    restage_upgrade_repo
+  fi
 
   wait_longhorn_engines
 
@@ -722,6 +736,7 @@ upgrade_os() {
 
   if [ "$REPO_OS_PRETTY_NAME" = "$CURRENT_OS_VERSION" ] && [ "$REPO_SERVER_FLAVOR" = "$current_server_flavor" ]; then
     echo "Skip upgrading OS. The OS version is already \"$CURRENT_OS_VERSION\" ($current_server_flavor)."
+    rm -rf "$UPGRADE_REPO_CACHE_DIR"
     return
   fi
 
@@ -861,6 +876,7 @@ EOF
 
   umount $tmp_rootfs_mount
   rm -rf $tmp_rootfs_squashfs
+  rm -rf "$UPGRADE_REPO_CACHE_DIR"
 
   reboot_if_job_succeed
 }
@@ -883,7 +899,10 @@ switch_ingress() {
 }
 
 command_post_drain() {
-  load_staged_upgrade_repo
+  if ! load_staged_upgrade_repo; then
+    restage_upgrade_repo
+    load_staged_upgrade_repo
+  fi
 
   # update max-pods to 200
   set_max_pods
@@ -916,8 +935,12 @@ command_single_node_upgrade() {
   disable_rke2_charts
 
   # Copy OS things, we need to shutdown repo VMs.
-  NEW_OS_SQUASHFS_IMAGE_FILE=$(mktemp -p $UPGRADE_TMP_DIR)
-  download_file "$UPGRADE_REPO_SQUASHFS_IMAGE" "$NEW_OS_SQUASHFS_IMAGE_FILE"
+  if [ -s "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
+    NEW_OS_SQUASHFS_IMAGE_FILE=$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE
+  else
+    NEW_OS_SQUASHFS_IMAGE_FILE=$(mktemp -p $UPGRADE_TMP_DIR)
+    download_file "$UPGRADE_REPO_SQUASHFS_IMAGE" "$NEW_OS_SQUASHFS_IMAGE_FILE"
+  fi
 
   # Shut down non-live migratable VMs
   upgrade-helper vm-live-migrate-detector "$HARVESTER_UPGRADE_NODE_NAME" --shutdown --upgrade "$HARVESTER_UPGRADE_NAME"

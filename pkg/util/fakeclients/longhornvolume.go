@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/rest"
 
 	longhornv1beta2 "github.com/harvester/harvester/pkg/generated/clientset/versioned/typed/longhorn.io/v1beta2"
 )
@@ -45,6 +46,10 @@ func (c LonghornVolumeClient) Watch(namespace string, opts metav1.ListOptions) (
 
 func (c LonghornVolumeClient) Patch(namespace, name string, pt types.PatchType, data []byte, subresources ...string) (result *lhv1beta2.Volume, err error) {
 	return c(namespace).Patch(context.TODO(), name, pt, data, metav1.PatchOptions{}, subresources...)
+}
+
+func (c LonghornVolumeClient) WithImpersonation(_ rest.ImpersonationConfig) (generic.ClientInterface[*lhv1beta2.Volume, *lhv1beta2.VolumeList], error) {
+	panic("implement me")
 }
 
 type LonghornVolumeCache func(string) longhornv1beta2.VolumeInterface

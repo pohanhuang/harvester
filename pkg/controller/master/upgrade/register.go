@@ -113,6 +113,7 @@ func Register(ctx context.Context, management *config.Management, options config
 	secrets := management.CoreFactory.Core().V1().Secret()
 	pvcs := management.CoreFactory.Core().V1().PersistentVolumeClaim()
 	lhSettings := management.LonghornFactory.Longhorn().V1beta2().Setting()
+	lhVolumes := management.LonghornFactory.Longhorn().V1beta2().Volume()
 	configMaps := management.CoreFactory.Core().V1().ConfigMap()
 	addons := management.HarvesterFactory.Harvesterhci().V1beta1().Addon()
 	storageClasses := management.StorageFactory.Storage().V1().StorageClass()
@@ -156,6 +157,7 @@ func Register(ctx context.Context, management *config.Management, options config
 		clusterCache:       clusters.Cache(),
 		lhSettingClient:    lhSettings,
 		lhSettingCache:     lhSettings.Cache(),
+		lhVolumeClient:     lhVolumes,
 		vmRestClient:       virtSubresourceClient,
 		deploymentClient:   deployments,
 		deploymentCache:    deployments.Cache(),

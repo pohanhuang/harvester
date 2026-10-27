@@ -198,6 +198,20 @@ detect_repo_type()
   echo ""
 }
 
+# Scale the Deployment-based repo. The controller stops it during node
+# upgrades, so a node that needs it again has to start it.
+scale_repo_deployment()
+{
+  local replicas=$1
+  local deployment_name="upgrade-repo-$HARVESTER_UPGRADE_NAME"
+
+  if [[ "$(detect_repo_type)" != "deployment" ]]; then
+    return 0
+  fi
+
+  kubectl scale deployment $deployment_name -n $UPGRADE_NAMESPACE --replicas=$replicas
+}
+
 # Wait for deployment to be ready
 wait_repo_deployment()
 {

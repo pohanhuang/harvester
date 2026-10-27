@@ -81,6 +81,7 @@ const (
 	skipManifestsApplyPlanCompletedAnnotation  = "harvesterhci.io/apply-skip-rke2-manifests-plan-completed"
 	skipManifestsRemovePlanCompletedAnnotation = "harvesterhci.io/remove-skip-rke2-manifests-plan-completed"
 	imageCleanupPlanCompletedAnnotation        = "harvesterhci.io/image-cleanup-plan-completed"
+	imageCleanupListAnnotation                 = "harvesterhci.io/image-cleanup-list"
 	skipVersionCheckAnnotation                 = "harvesterhci.io/skip-version-check"
 	reenableDeschedulerAddonAnnotation         = "harvesterhci.io/reenable-descheduler-addon"
 	kubevirtWorkloadUpdateMethodsAnnotation    = "harvesterhci.io/kubevirt-workload-update-methods"
@@ -127,6 +128,7 @@ type upgradeHandler struct {
 
 	lhSettingClient ctllhv1.SettingClient
 	lhSettingCache  ctllhv1.SettingCache
+	lhVolumeClient  ctllhv1.VolumeClient
 
 	vmRestClient rest.Interface
 	scClient     ctlstoragev1.StorageClassClient
@@ -257,30 +259,40 @@ func (h *upgradeHandler) OnChanged(_ string, upgrade *harvesterv1.Upgrade) (*har
 			return h.upgradeClient.Update(latest)
 		}
 
-		vm, errVM := h.vmCache.Get(repo.GetVMNamespace(), repo.GetVMName())
-		_, errDeployment := h.deploymentCache.Get(repo.GetVMNamespace(), repo.GetVMName())
-		if errVM != nil && !apierrors.IsNotFound(errVM) {
-			return nil, fmt.Errorf("failed to get repo VM %s/%s from cache: %w", repo.GetVMNamespace(), repo.GetVMName(), errVM)
-		}
-		if errDeployment != nil && !apierrors.IsNotFound(errDeployment) {
-			return nil, fmt.Errorf("failed to get repo deployment %s/%s from cache: %w", repo.GetVMNamespace(), repo.GetVMName(), errDeployment)
-		}
+		// The repo is only needed when the image list wasn't cached before node upgrades
+		if _, cached := upgrade.Annotations[imageCleanupListAnnotation]; !cached {
+			vm, errVM := h.vmCache.Get(repo.GetVMNamespace(), repo.GetVMName())
+			_, errDeployment := h.deploymentCache.Get(repo.GetVMNamespace(), repo.GetVMName())
+			if errVM != nil && !apierrors.IsNotFound(errVM) {
+				return nil, fmt.Errorf("failed to get repo VM %s/%s from cache: %w", repo.GetVMNamespace(), repo.GetVMName(), errVM)
+			}
+			if errDeployment != nil && !apierrors.IsNotFound(errDeployment) {
+				return nil, fmt.Errorf("failed to get repo deployment %s/%s from cache: %w", repo.GetVMNamespace(), repo.GetVMName(), errDeployment)
+			}
 
-		// Check if both VM and Deployment are missing for backward compatibility:
-		// - versions before v1.7.0: Uses VM for preload stage
-		// - v1.7.0+: Uses Deployment only
-		// - v1.6.x to v1.7.x upgrade: Still requires VM during transition
-		vmNotFound := errVM != nil && apierrors.IsNotFound(errVM)
-		deploymentNotFound := errDeployment != nil && apierrors.IsNotFound(errDeployment)
-		if vmNotFound && deploymentNotFound {
-			return nil, fmt.Errorf("both repo VM and Deployment %s/%s not found", repo.GetVMNamespace(), repo.GetVMName())
-		}
+			// Check if both VM and Deployment are missing for backward compatibility:
+			// - versions before v1.7.0: Uses VM for preload stage
+			// - v1.7.0+: Uses Deployment only
+			// - v1.6.x to v1.7.x upgrade: Still requires VM during transition
+			vmNotFound := errVM != nil && apierrors.IsNotFound(errVM)
+			deploymentNotFound := errDeployment != nil && apierrors.IsNotFound(errDeployment)
+			if vmNotFound && deploymentNotFound {
+				return nil, fmt.Errorf("both repo VM and Deployment %s/%s not found", repo.GetVMNamespace(), repo.GetVMName())
+			}
 
-		if !vmNotFound && !vmReady.IsTrue(vm) {
-			// repo VM is required for the image cleaning procedure, bring it up if it's down
-			logrus.Info("Try to start repo VM for image pruning")
-			if err := h.startVM(context.Background(), vm); err != nil {
-				return nil, fmt.Errorf("failed to start repo vm %s/%s for image pruning: %w", vm.Namespace, vm.Name, err)
+			if !vmNotFound && !vmReady.IsTrue(vm) {
+				// repo VM is required for the image cleaning procedure, bring it up if it's down
+				logrus.Info("Try to start repo VM for image pruning")
+				if err := h.startVM(context.Background(), vm); err != nil {
+					return nil, fmt.Errorf("failed to start repo vm %s/%s for image pruning: %w", vm.Namespace, vm.Name, err)
+				}
+			}
+
+			// repo deployment is stopped during node upgrades, bring it up for image pruning
+			if !deploymentNotFound {
+				if err := repo.ScaleDeployment(1); err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -342,6 +354,12 @@ func (h *upgradeHandler) OnChanged(_ string, upgrade *harvesterv1.Upgrade) (*har
 			return nil, err
 		}
 		toUpdate.Status.SingleNode = singleNode
+
+		// Nodes stage the OS files before their upgrade and the repo is stopped
+		// during node upgrades, so its volume doesn't need extra replicas.
+		if err := repo.SetVolumeReplicas(1); err != nil {
+			logrus.Warnf("Failed to set replicas of upgrade repo volume: %s", err.Error())
+		}
 
 		// Upgrade Repo Info Retrieval
 		backoff := wait.Backoff{
@@ -450,6 +468,12 @@ func (h *upgradeHandler) OnChanged(_ string, upgrade *harvesterv1.Upgrade) (*har
 				return nil, err
 			}
 
+			// The repo is stopped during node upgrades (see below), so cache the image
+			// list for the post-upgrade cleanup while the repo is still serving.
+			if err := cacheImageCleanupList(toUpdate, repo); err != nil {
+				logrus.Warnf("Failed to cache image cleanup list, the repo will be started again for cleanup: %s", err.Error())
+			}
+
 			// Persist the in-memory annotations set above (replica-replenishment-wait-interval
 			// and reenable-descheduler-addon) before attempting upgradeKubernetes. Both are
 			// read later during cleanup; if upgradeKubernetes fails and we returned without
@@ -460,6 +484,13 @@ func (h *upgradeHandler) OnChanged(_ string, upgrade *harvesterv1.Upgrade) (*har
 				return nil, err
 			}
 			toUpdate = persisted.DeepCopy()
+
+			// Every node staged the OS files during PreparingNodes, so the repo isn't
+			// needed while nodes are upgraded. Stopping it detaches the repo volume, so
+			// storage like Longhorn with a single replica doesn't block node drains.
+			if err := repo.ScaleDeployment(0); err != nil {
+				return upgrade, err
+			}
 
 			// go with RKE2 pre-drain/post-drain hooks
 			logrus.Infof("Start upgrading Kubernetes runtime to %s", info.Release.Kubernetes)
@@ -519,8 +550,45 @@ func (h *upgradeHandler) ensureSkipManifestPlanCompleted(upgrade *harvesterv1.Up
 	return true, nil
 }
 
+// cacheImageCleanupList stores the images to be purged after the upgrade in an
+// annotation, so the post-upgrade cleanup doesn't need the repo.
+func cacheImageCleanupList(upgrade *harvesterv1.Upgrade, repo *Repo) error {
+	if _, exists := upgrade.Annotations[imageCleanupListAnnotation]; exists {
+		return nil
+	}
+
+	imageList, err := repo.getImagesDiffList()
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(imageList)
+	if err != nil {
+		return err
+	}
+
+	if upgrade.Annotations == nil {
+		upgrade.Annotations = make(map[string]string)
+	}
+	upgrade.Annotations[imageCleanupListAnnotation] = string(data)
+	return nil
+}
+
+func getImageCleanupList(upgrade *harvesterv1.Upgrade, repo *Repo) ([]string, error) {
+	data, exists := upgrade.Annotations[imageCleanupListAnnotation]
+	if !exists {
+		return repo.getImagesDiffList()
+	}
+
+	var imageList []string
+	if err := json.Unmarshal([]byte(data), &imageList); err != nil {
+		return nil, fmt.Errorf("failed to parse annotation %s: %w", imageCleanupListAnnotation, err)
+	}
+	return imageList, nil
+}
+
 func (h *upgradeHandler) cleanupImages(upgrade *harvesterv1.Upgrade, repo *Repo) error {
-	toBePurgedImageList, err := repo.getImagesDiffList()
+	toBePurgedImageList, err := getImageCleanupList(upgrade, repo)
 	if err != nil {
 		return err
 	}

@@ -532,6 +532,69 @@ func (r *Repo) deleteDeployment() error {
 	return nil
 }
 
+// ScaleDeployment sets the replica count of the repo deployment. It's a no-op
+// if the repo is VM-based (created by an older Harvester) or already scaled.
+func (r *Repo) ScaleDeployment(replicas int32) error {
+	deployment, err := r.h.deploymentClient.Get(r.GetVMNamespace(), r.GetDeploymentName(), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get deployment %s/%s error %w", r.GetVMNamespace(), r.GetDeploymentName(), err)
+	}
+
+	if deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == replicas {
+		return nil
+	}
+
+	logrus.Infof("Scale upgrade repo deployment %s/%s to %d", deployment.Namespace, deployment.Name, replicas)
+	toUpdate := deployment.DeepCopy()
+	toUpdate.Spec.Replicas = &replicas
+	if _, err := r.h.deploymentClient.Update(toUpdate); err != nil {
+		return fmt.Errorf("failed to scale deployment %s/%s error %w", deployment.Namespace, deployment.Name, err)
+	}
+	return nil
+}
+
+// SetVolumeReplicas sets the Longhorn replica count of the repo volume. The
+// repo is stopped while nodes are upgraded, so a single replica doesn't block
+// node drains. It's a no-op if the volume isn't a Longhorn volume.
+func (r *Repo) SetVolumeReplicas(replicas int) error {
+	image, err := r.GetImage(r.upgrade.Status.ImageID)
+	if err != nil {
+		return err
+	}
+
+	// the repo PVC is named after the image, see CreateDeployment
+	pvc, err := r.h.pvcClient.Get(image.Namespace, image.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get repo pvc %s/%s error %w", image.Namespace, image.Name, err)
+	}
+	if pvc.Spec.VolumeName == "" {
+		return fmt.Errorf("repo pvc %s/%s is not bound", pvc.Namespace, pvc.Name)
+	}
+
+	volume, err := r.h.lhVolumeClient.Get(util.LonghornSystemNamespaceName, pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get repo volume %s error %w", pvc.Spec.VolumeName, err)
+	}
+
+	if volume.Spec.NumberOfReplicas == replicas {
+		return nil
+	}
+
+	logrus.Infof("Set replicas of upgrade repo volume %s to %d", volume.Name, replicas)
+	toUpdate := volume.DeepCopy()
+	toUpdate.Spec.NumberOfReplicas = replicas
+	if _, err := r.h.lhVolumeClient.Update(toUpdate); err != nil {
+		return fmt.Errorf("failed to update repo volume %s error %w", volume.Name, err)
+	}
+	return nil
+}
+
 func (r *Repo) GetDeploymentName() string {
 	return fmt.Sprintf("%s%s", repoServiceNamePrefix, r.upgrade.Name)
 }

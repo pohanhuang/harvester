@@ -561,6 +561,9 @@ longhorn:
   defaultSettings:
     ## Specify the concurrent automatic engine upgrade per node limit
     concurrentAutomaticEngineUpgradePerNodeLimit: "3"
+    ## Replica count for volumes whose StorageClass doesn't set numberOfReplicas, e.g. the
+    ## upgrade repo on `longhorn-static`. Harvester's own StorageClasses set it explicitly.
+    defaultReplicaCount: 1
     priorityClass: &longhornPriorityClass system-cluster-critical
     autoCleanupSnapshotWhenDeleteBackup: true
     orphanResourceAutoDeletion: instance
