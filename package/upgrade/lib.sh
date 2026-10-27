@@ -16,17 +16,22 @@ download_file()
   echo "Downloading the file from \"$url\" to \"$output\"..."
   local i=0
   while [[ "$i" -lt 100 ]]; do
-    curl -sSfL "$url" -o "$output" --create-dirs && break
-    echo "Failed to download the requested file from \"$url\" to \"$output\" with error code: $?, retrying ($i)..."
+    local ret=0
+    curl -sSfL "$url" -o "$output" --create-dirs || ret=$?
+    if [ "$ret" -eq 0 ]; then
+      return 0
+    fi
+    echo "Failed to download the requested file from \"$url\" to \"$output\" with error code: $ret, retrying ($i)..."
     sleep 10
     i=$((i + 1))
   done
+
+  return 1
 }
 
-detect_repo()
+load_repo_release()
 {
-  release_file=$(mktemp --suffix=.yaml)
-  download_file "$UPGRADE_REPO_RELEASE_FILE" "$release_file"
+  local release_file=$1
 
   REPO_HARVESTER_VERSION=$(yq -e e '.harvester' $release_file)
   REPO_HARVESTER_CHART_VERSION=$(yq -e e '.harvesterChart' $release_file)
@@ -134,6 +139,15 @@ detect_repo()
     echo "[ERROR] Fail to get kubevirt version from upgrade repo."
     exit 1
   fi
+}
+
+detect_repo()
+{
+  local release_file
+  release_file=$(mktemp --suffix=.yaml)
+  download_file "$UPGRADE_REPO_RELEASE_FILE" "$release_file"
+
+  load_repo_release "$release_file"
 
   CACHED_BUNDLE_METADATA=$(mktemp --suffix=.yaml)
   download_file "$UPGRADE_REPO_BUNDLE_METADATA" "$CACHED_BUNDLE_METADATA"

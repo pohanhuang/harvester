@@ -4,6 +4,9 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 source $SCRIPT_DIR/lib.sh
 UPGRADE_TMP_DIR=$HOST_DIR/usr/local/upgrade_tmp
+UPGRADE_REPO_CACHE_DIR=$UPGRADE_TMP_DIR/repo-$HARVESTER_UPGRADE_NAME
+UPGRADE_REPO_CACHED_RELEASE_FILE=$UPGRADE_REPO_CACHE_DIR/harvester-release.yaml
+UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE=$UPGRADE_REPO_CACHE_DIR/rootfs.squashfs
 STATE_DIR=$HOST_DIR/run/initramfs/cos-state
 MAX_PODS=200
 
@@ -88,6 +91,10 @@ clean_up_tmp_files()
   if [ -n "$tmp_rootfs_squashfs" ]; then
     echo "Try to remove $tmp_rootfs_squashfs..."
     rm -vf "$tmp_rootfs_squashfs"
+  fi
+  if [ -f "$UPGRADE_REPO_CACHED_RELEASE_FILE" ]; then
+    echo "Try to remove $UPGRADE_REPO_CACHED_RELEASE_FILE..."
+    rm -vf "$UPGRADE_REPO_CACHED_RELEASE_FILE"
   fi
 
   if is_mounted "/run/cos/state"; then
@@ -291,6 +298,39 @@ command_prepare()
   preload_images
 }
 
+stage_upgrade_repo()
+{
+  local release_file_tmp=$UPGRADE_REPO_CACHED_RELEASE_FILE.partial
+  local squashfs_image_file_tmp=$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE.partial
+
+  mkdir -p "$UPGRADE_REPO_CACHE_DIR"
+  rm -f "$release_file_tmp" "$squashfs_image_file_tmp"
+
+  wait_repo
+
+  download_file "$UPGRADE_REPO_RELEASE_FILE" "$release_file_tmp"
+  load_repo_release "$release_file_tmp"
+  mv "$release_file_tmp" "$UPGRADE_REPO_CACHED_RELEASE_FILE"
+
+  download_file "$UPGRADE_REPO_SQUASHFS_IMAGE" "$squashfs_image_file_tmp"
+  if [ ! -s "$squashfs_image_file_tmp" ]; then
+    echo "[ERROR] Downloaded rootfs.squashfs is empty."
+    return 1
+  fi
+  mv "$squashfs_image_file_tmp" "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE"
+}
+
+load_staged_upgrade_repo()
+{
+  if [ ! -s "$UPGRADE_REPO_CACHED_RELEASE_FILE" ] || [ ! -s "$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE" ]; then
+    echo "[ERROR] Upgrade repo files were not staged during pre-drain."
+    return 1
+  fi
+
+  load_repo_release "$UPGRADE_REPO_CACHED_RELEASE_FILE"
+  NEW_OS_SQUASHFS_IMAGE_FILE=$UPGRADE_REPO_CACHED_SQUASHFS_IMAGE_FILE
+}
+
 wait_evacuation_pdb_gone()
 {
   # TODO: fine-tune this to per-VM check
@@ -362,6 +402,10 @@ wait_longhorn_engines() {
 }
 
 command_pre_drain() {
+  # The repo can be unavailable after this node is drained when it uses RWO
+  # storage. Stage everything needed by post-drain on the host first.
+  stage_upgrade_repo
+
   recover_rancher_system_agent
 
   wait_longhorn_engines
@@ -839,8 +883,7 @@ switch_ingress() {
 }
 
 command_post_drain() {
-  wait_repo
-  detect_repo
+  load_staged_upgrade_repo
 
   # update max-pods to 200
   set_max_pods
