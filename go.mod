@@ -17,7 +17,7 @@ replace (
 	github.com/rancher/rancher/pkg/apis => github.com/rancher/rancher/pkg/apis v0.0.0-20250828140533-07a90f09a491
 	github.com/rancher/rancher/pkg/client => github.com/rancher/rancher/pkg/client v0.0.0-20250828140533-07a90f09a491
 	// handle rancher dependenices
-	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20231114201952-65195ec001fa
+	go.qase.io/client => github.com/rancher/qase-go/client v0.0.0-20250627195016-142ff3dfec16
 
 	helm.sh/helm/v3 => github.com/rancher/helm/v3 v3.15.1-rancher2
 	k8s.io/api => k8s.io/api v0.33.7
@@ -84,17 +84,17 @@ require (
 	github.com/openshift/api v0.0.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.82.0
-	github.com/rancher/apiserver v0.7.3
-	github.com/rancher/dynamiclistener v0.7.0
-	github.com/rancher/fleet/pkg/apis v0.12.3
+	github.com/rancher/apiserver v0.10.1
+	github.com/rancher/dynamiclistener v0.9.3
+	github.com/rancher/fleet/pkg/apis v0.16.2
 	github.com/rancher/lasso v0.2.3
-	github.com/rancher/norman v0.7.0
+	github.com/rancher/norman v0.10.1
 	github.com/rancher/rancher v0.0.0-20240618122559-b9ec494d4f6f
 	github.com/rancher/rancher/pkg/apis v0.0.0
-	github.com/rancher/steve v0.7.17
-	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20250306000150-b1a9781accab
+	github.com/rancher/steve v0.10.8
+	github.com/rancher/system-upgrade-controller/pkg/apis v0.0.0-20260923180507-96eced818739
 	github.com/rancher/wrangler v1.1.2
-	github.com/rancher/wrangler/v3 v3.2.4
+	github.com/rancher/wrangler/v3 v3.7.2
 	github.com/robfig/cron v1.2.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.3
@@ -282,12 +282,12 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
-	github.com/rancher/aks-operator v1.11.5 // indirect
-	github.com/rancher/eks-operator v1.11.5 // indirect
-	github.com/rancher/gke-operator v1.11.5 // indirect
+	github.com/rancher/aks-operator v1.15.2 // indirect
+	github.com/rancher/eks-operator v1.15.2 // indirect
+	github.com/rancher/gke-operator v1.15.3 // indirect
 	github.com/rancher/kubernetes-provider-detector v0.1.5 // indirect
-	github.com/rancher/remotedialer v0.4.5-rc.3 // indirect
-	github.com/rancher/rke v1.8.5 // indirect
+	github.com/rancher/remotedialer v0.6.1 // indirect
+	github.com/rancher/rke v1.8.14 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rhobs/operator-observability-toolkit v0.0.29 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
