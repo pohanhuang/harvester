@@ -41,6 +41,7 @@ const (
 	LabelHarvesterUpgradeState          = prefix + "/upgradeState"
 	LabelHarvesterUpgradeComponent      = prefix + "/upgradeComponent"
 	LabelHarvesterLatestUpgrade         = prefix + "/latestUpgrade"
+	LabelServerFlavor                   = prefix + "/serverFlavor" // flavor of the ISO a Version points to
 	AnnotationStorageClassName          = prefix + "/storageClassName"
 	AnnotationStorageProvisioner        = prefix + "/storageProvisioner"
 	AnnotationIsDefaultStorageClassName = "storageclass.kubernetes.io/is-default-class"
@@ -94,6 +95,9 @@ const (
 	// for the upgrade repository Deployment. The UI also uses this annotation during
 	// airgap upgrades when uploading images.
 	AnnotationUpgradeImage = prefix + "/os-upgrade-image"
+
+	// AnnotationPreviousUpgradeImage records the harvester-upgrade image of the version an upgrade starts from.
+	AnnotationPreviousUpgradeImage = prefix + "/previous-upgrade-image"
 
 	AnnotationNodeUpgradePauseMap = prefix + "/node-upgrade-pause-map"
 	NodePause                     = "pause"
