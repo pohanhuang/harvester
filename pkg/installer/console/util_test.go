@@ -45,6 +45,11 @@ func TestRoleSetupLonghornDefaultDiskLabel(t *testing.T) {
 			install:   config.Install{Role: config.RoleWitness},
 			wantLabel: false,
 		},
+		{
+			name:      "empty role defaults to default, creates disk label",
+			install:   config.Install{Role: ""},
+			wantLabel: true,
+		},
 	}
 
 	for _, testCase := range testCases {
